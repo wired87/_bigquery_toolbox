@@ -1,0 +1,8 @@
+typer
+rich
+pandas
+google-cloud-bigquery
+google-cloud-aiplatform
+networkx
+db-dtypes
+openpyxl
