@@ -4,7 +4,7 @@ A powerful Python-based toolbox for intelligent BigQuery data management with AI
 
 ## 🌟 Features
 
-### Core Functionality
+### Core Functionality (run python cli.py)
 
 #### 1. **Intelligent Data Ingestion**
 - Automated CSV/JSON data upload to BigQuery
