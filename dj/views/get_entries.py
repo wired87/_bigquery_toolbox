@@ -2,7 +2,7 @@ from typing import List
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, serializers
-from _bq_core.bq_handler import BQCore
+from bq_handler import BQCore
 
 
 class BQGetTableDataSerializer(serializers.Serializer):

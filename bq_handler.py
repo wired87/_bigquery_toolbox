@@ -39,12 +39,19 @@ class BQGroundZero:
         try:
             self.bqclient.get_dataset(ds_name)
             # print(f"Dataset '{ds_name}' already exists.")
+        except NotFound:
+             print(f"Dataset '{ds_name}' does not exist. Creating...")
+             try:
+                 dataset = bigquery.Dataset(ds_name)
+                 dataset.location = "US"
+                 self.bqclient.create_dataset(dataset)
+                 print(f"✅ Dataset '{ds_name}' created successfully.")
+             except Exception as create_err:
+                 print(f"❌ Failed to create dataset '{ds_name}': {create_err}")
+                 # Re-raise or handle as critical failure depending on context
+                 # For BQHandler generic init, maybe just print
         except Exception as e:
-            print(f"Dataset '{ds_name}' does not exist. Creating: {e}")
-            dataset = bigquery.Dataset(ds_name)
-            dataset.location = "US"
-            self.bqclient.create_dataset(dataset)
-            print(f"Dataset '{ds_name}' created successfully.")
+            print(f"❌ Error checking dataset '{ds_name}': {e}")
 
 
 
@@ -52,8 +59,8 @@ class BQGroundZero:
         """Escape a string for use in BigQuery SQL."""
         if s is None:
             return "NULL"
-        # Replace backslashes first, then single quotes
-        s = str(s).replace("\\", "\\\\").replace("'", "\\'")
+        # Replace backslashes first, then single quotes, then newlines
+        s = str(s).replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
         return f"'{s}'"
 
     def upsert_query(self, table_id):
@@ -81,8 +88,14 @@ class BQGroundZero:
     def upsert_row_query(self, table_id: str, rows: list[dict], schema: dict[str]) -> str:
         # 1. Determine column names and types from schema to ensure consistent order
         if isinstance(schema, list):
-            col_map = {f.name: f.field_type for f in schema}
-            col_names = [f.name for f in schema]
+            col_map = {}
+            col_names = []
+            for f in schema:
+                col_names.append(f.name)
+                f_type = f.field_type
+                if f.mode == "REPEATED":
+                    f_type = f"ARRAY<{f_type}>"
+                col_map[f.name] = f_type
         elif isinstance(schema, dict):
             col_map = schema
             col_names = list(schema.keys())
@@ -282,10 +295,15 @@ class BQGroundZero:
                     field_type = "INT64"
                 elif isinstance(value, float):
                     field_type = "FLOAT64"
-                elif isinstance(value, list) and embed:
-                    # for i in value:
-                    #     print("it", type(i))
-                    field_type = "ARRAY<FLOAT64>" # Assuming embed is float array
+                elif isinstance(value, list):
+                    if len(value) > 0 and isinstance(value[0], str):
+                         field_type = "ARRAY<STRING>"
+                    elif len(value) > 0 and isinstance(value[0], (int, float)):
+                         field_type = "ARRAY<FLOAT64>"
+                    elif embed:
+                         field_type = "ARRAY<FLOAT64>" # Legacy support
+                    else:
+                         field_type = "STRING" # Fallback
                 else:
                     field_type = "STRING"
                 
@@ -295,7 +313,9 @@ class BQGroundZero:
                     # Conflict resolution
                     prev = schema_map[key]
                     if prev != field_type:
-                        if prev == "INT64" and field_type == "FLOAT64":
+                        if "ARRAY" in prev and "ARRAY" in field_type:
+                             pass # Assume compatible
+                        elif prev == "INT64" and field_type == "FLOAT64":
                             schema_map[key] = "FLOAT64"
                         elif prev == "FLOAT64" and field_type == "INT64":
                             pass # Keep FLOAT64
@@ -309,7 +329,14 @@ class BQGroundZero:
 
         schema = []
         for k, v in schema_map.items():
-            schema.append(bigquery.SchemaField(k, v, mode="NULLABLE"))
+            mode = "NULLABLE"
+            field_type = v
+            if v.startswith("ARRAY<"):
+                mode = "REPEATED"
+                # Extract inner type: ARRAY<STRING> -> STRING
+                field_type = v[6:-1]
+            
+            schema.append(bigquery.SchemaField(k, field_type, mode=mode))
         return schema
 
     def convert_dict_shema_bq(self, schema):
@@ -579,8 +606,8 @@ class BQCore(BQGroundZero):
         except Exception as e:
             error_msg = str(e)
             
-            # Log query to file for debugging if it's a syntax error
-            if "Syntax error" in error_msg or "invalidQuery" in error_msg:
+            # Log query to file for debugging
+            if True:
                 try:
                     import os
                     debug_file = os.path.join(os.path.dirname(__file__), "failed_query_debug.sql")

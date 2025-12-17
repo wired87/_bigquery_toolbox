@@ -1,4 +1,4 @@
-from _bq_core.bq_handler import BQCore
+from bq_handler import BQCore
 
 if __name__ =="__main__":
     bqc = BQCore(

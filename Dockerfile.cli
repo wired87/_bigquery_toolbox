@@ -1,0 +1,27 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install system dependencies for audio (optional but good for speech handler)
+# PortAudio (for pyaudio/speech_recognition) is often needed given requirements.txt has pyaudio
+RUN apt-get update && apt-get install -y \
+    portaudio19-dev \
+    python3-pyaudio \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+# Filter requirements or just install what we need. 
+# We can install via setup.py
+COPY setup.py .
+COPY cli.py .
+COPY remote_engine.py .
+COPY speech_handler.py .
+COPY ip_manager.py .
+
+# Install the package
+RUN pip install .
+
+# Environment variable for server URL
+ENV SERVER_URL="http://localhost:8000"
+
+ENTRYPOINT ["bq-toolbox"]
