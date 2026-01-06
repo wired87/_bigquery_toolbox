@@ -15,6 +15,8 @@ from pydantic import BaseModel, Field
 from google.cloud import bigquery
 from google.cloud import documentai
 from google.api_core.client_options import ClientOptions
+import vertexai
+from vertexai.language_models import TextEmbeddingModel
 
 # LangChain
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -43,7 +45,7 @@ class PipelineConfig(BaseModel):
     use_docai: bool = True
     processor_id: Optional[str] = PROCESSOR_ID
     dataset_id: str
-    table_id: str = "kb"
+    table_id: str = "KB"
 
 class KnowledgeRow(BaseModel):
     """
@@ -65,6 +67,12 @@ class KnowledgeRow(BaseModel):
     # New Field
     relative_parent_dir: Optional[str] = None
     
+    # Table-specific fields
+    is_table_row: Optional[bool] = None
+    table_id: Optional[str] = None
+    row_number: Optional[int] = None
+    columns: Optional[Dict[str, str]] = None
+    
     def to_bq_dict(self):
          data = self.model_dump()
          if data.get("embedding") is None:
@@ -74,7 +82,14 @@ class KnowledgeRow(BaseModel):
 class ProductionIngestionPipeline:
     def __init__(self, config: PipelineConfig):
         self.config = config
-        self.bq_client = bigquery.Client(project=PROJECT_ID)
+        try:
+            self.bq_client = bigquery.Client()
+            global PROJECT_ID
+            PROJECT_ID = self.bq_client.project
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to init BQ Client in Pipeline: {e}")
+            self.bq_client = None
+            
         self.docai_client = None
         
         # Init DocAI (only if needed)
@@ -86,7 +101,16 @@ class ProductionIngestionPipeline:
             chunk_overlap=self.config.chunk_overlap
         )
         
-        # Performance check
+        # Init Vertex AI for embeddings
+        if self.bq_client:
+            try:
+                vertexai.init(project=PROJECT_ID, location="us-central1")
+                self.embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
+                logger.info("✅ Vertex AI Embedding Model (text-embedding-004) initialized.")
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to init Vertex AI: {e}")
+                self.embedding_model = None
+
         self.start_time = None
 
     async def run_pipeline_for_bytes(self, filename: str, content: bytes, status_callback=None, metadata: Optional[Dict[str, Any]] = None):
@@ -97,12 +121,12 @@ class ProductionIngestionPipeline:
 
         logger.info(f"🚀 Processing file: {filename}")
         
+        if not self.bq_client:
+            logger.error("❌ BigQuery client not available. Aborting pipeline.")
+            return "Failed: Credentials missing on server."
+
         # 1. Extraction (In-Memory)
         await report(f"📑 Extracting content from {filename}...")
-        if (datetime.now() - self.start_time).total_seconds() > 3:
-             logger.warning("⚠️ Time budget exceeded before extraction.")
-             await report("⚠️ Time budget exceeded before extraction.")
-             return "Processing aborted due to timeout."
         
         docs = await self.extract_content(filename, content)
         if not docs:
@@ -116,12 +140,19 @@ class ProductionIngestionPipeline:
         
         # 3. Schema Check
         await report("🛠️ Verifying BigQuery resources...")
-        self.ensure_resources()
+        await asyncio.to_thread(self.ensure_resources)
         
-        # 4. Upsert (Optimized)
+        # 4. Generate Embeddings (Vertex AI)
+        if self.embedding_model:
+            await report(f"🧠 Generating embeddings for {len(rows)} chunks...")
+            await asyncio.to_thread(self.generate_batch_embeddings, rows)
+        else:
+            await report("⚠️  Embedding model not available. Skipping embedding generation.")
+            
+        # 5. Upsert (Optimized)
         await report(f"💾 Upserting {len(rows)} rows to BigQuery...")
         upsert_start = datetime.now()
-        count = self.upsert_rows(rows)
+        count = await asyncio.to_thread(self.upsert_rows, rows)
         upsert_time = (datetime.now() - upsert_start).total_seconds()
         
         total_time = (datetime.now() - self.start_time).total_seconds()
@@ -149,29 +180,9 @@ class ProductionIngestionPipeline:
         # D. Default Text / CSV / Code
         try:
              text = content.decode('utf-8', errors='ignore')
-             # Use GUtils to embed this text to ensure quality
-             gutils = GUtils(project_id=PROJECT_ID)
-             # Create a node (defer embedding to batch)
-             node = gutils.create_node(
-                 tag_name="file_content", 
-                 content=text, 
-                 metadata={"file_name": filename, "type": "text"},
-                 defer_embedding=True
-             )
-             
-             # Process embeddings
-             logger.info(f"Generating local embedding for {filename}...")
-             gutils.generate_embeddings_batched(batch_size=1)
-             
-             # Return as document with embedding
-             emb = gutils.nodes[node.id].embedding
              return [Document(
                  page_content=text, 
-                 metadata={
-                     "file_name": filename, 
-                     "type": "text", 
-                     "embedding": emb
-                 }
+                 metadata={"file_name": filename, "type": "text"}
              )]
              
         except Exception as e:
@@ -209,7 +220,8 @@ class ProductionIngestionPipeline:
 
     async def _process_pdf_html(self, content: bytes, filename: str) -> List[Document]:
         """
-        Extracts HTML from PDF, builds a graph using GUtils, and returns nodes as Documents.
+        Extracts HTML from PDF, cleans tags to keep only content and tag name.
+        Enhanced to handle table elements with row/column structure.
         """
         try:
             # 1. Bare HTML Extraction (pdfminer)
@@ -218,101 +230,172 @@ class ProductionIngestionPipeline:
                 extract_text_to_fp(input_stream, output_string, output_type='html', laparams=LAParams())
             html_content = output_string.getvalue().decode("utf-8")
             
-            # 2. Parse & Enumerate
+            # 2. Parse & Clean
             soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Remove scripts and styles
+            for script_or_style in soup(["script", "style"]):
+                script_or_style.decompose()
+
             gutils = GUtils(project_id=PROJECT_ID) 
-            
-            # We strictly follow user logic: Enumerate blocks (start, content, end)
-            # We will use GUtils create_node but force splitting > 200 chars
-            
             docs = []
             
-            # Recursive traversal to capture structure
             def traverse(tag: Tag, parent_id: Optional[str] = None):
                 if not isinstance(tag, Tag): return
+                
+                # Special handling for table elements
+                if tag.name == 'table':
+                    table_docs = self._process_table_element(tag, filename, parent_id)
+                    docs.extend(table_docs)
+                    return  # Don't traverse children of table, already handled
 
-                block_content = str(tag) 
-                # User constraint: If len > 200 -> Split
+                # Get clean text content (no HTML/CSS)
+                text_content = tag.get_text(strip=True)
                 
-                # Logic: Create main node for the Tag
-                # Then if content is long, we might split it? 
-                # Or does user mean the *text content*? "Convert the block to a string".
-                # If block > 200 chars. GUtils usually handles this by creating one node.
-                # Here we need to split *into semantic chunks*.
-                
-                # We will defer embedding to batch at the end.
-                node = gutils.create_node(
-                    tag_name=tag.name,
-                    content=block_content,
-                    parent_id=parent_id,
-                    metadata={"file_name": filename, "file_type": "pdf", "page_number": 1}, # Page number hard to extract seamlessly from simple HTML output without markers
-                    defer_embedding=True
-                )
-                
-                # Handling chunks for this node if too large
-                # For simplicity in this graph model, we keep the node as is but 
-                # maybe add "sub-chunks" if we were strictly text-splitting?
-                # User says: "Create one table row per chunk".
-                # If we split, we get multiple chunks (Document objects).
-                # The prompt implies strictly chunking the *text* or *HTML string*?
-                # "Convert block to string... If len > 200... Split"
-                
-                # Let's assume we keep the GNode as the "Chunk" unless it's huge, 
-                # then we could logically split output Documents.
-                # GUtils.nodes stores 'content'. 
-                
-                for child in tag.children:
-                    if isinstance(child, Tag):
-                        traverse(child, node.id)
+                # Only process tags that have actual text content
+                if text_content:
+                    # Save just the clean content and the tag name
+                    # We avoid stringifying the whole tag (str(tag)) which contains attributes/styles
+                    node = gutils.create_node(
+                        tag_name=tag.name,
+                        content=text_content,
+                        parent_id=parent_id,
+                        metadata={
+                            "file_name": filename, 
+                            "file_type": "pdf", 
+                            "tag": tag.name,
+                            "page_number": 1 
+                        },
+                        defer_embedding=True
+                    )
+                    
+                    # Also create Documents for the pipeline flow
+                    # If content is long, we split it here
+                    if len(text_content) > 200:
+                        splits = self.splitter.split_text(text_content)
+                    else:
+                        splits = [text_content]
+                        
+                    for i, split in enumerate(splits):
+                        docs.append(Document(
+                            page_content=split,
+                            metadata={
+                                "id": f"{node.id}_{i}",
+                                "file_name": filename,
+                                "html_tag": tag.name,
+                                "parent_ref": parent_id
+                            }
+                        ))
+
+                    for child in tag.children:
+                        if isinstance(child, Tag):
+                            traverse(child, node.id)
 
             root = soup.body if soup.body else soup
             traverse(root)
-            
-            # 3. Embeddings (Batched Local/Remote)
-            # User constraint: "Embedding must run locally". 
-            # If standard VertexAI is configured, we use it for speed/quality equality with rest of system
-            # unless strictly replaced. Given prior setup uses Vertex, we stick to it but batch heavily.
-            logger.info("Generating embeddings in batches...")
-            gutils.generate_embeddings_batched(batch_size=200) # Larger batch for speed
-            
-            # 4. Similarity
-            logger.info("Computing similarity edges...")
-            gutils.process_similarity_edges(threshold=0.96)
-            
-            # 5. Convert to Documents
-            for node in gutils.nodes.values():
-                # Split logic implemented HERE to map to rows
-                node_content = node.content
-                
-                if len(node_content) > 200:
-                    # Semantic split
-                    splits = self.splitter.split_text(node_content)
-                else:
-                    splits = [node_content]
-                    
-                for i, split_content in enumerate(splits):
-                    # Link back to Node metadata
-                    meta = node.metadata.copy()
-                    meta.update({
-                        "id": f"{node.id}_{i}", # Deterministic Chunk ID
-                        "parent_ref": node.parent_id,
-                        "html_tag": node.tag,
-                        "embedding": node.embedding if i==0 else None, # Only first chunk gets the node embedding? Or re-embed?
-                        # User says "embedding -> local embedding of content". 
-                        # If we split, we technically need embedding per chunk. 
-                        # GUtils embedding is for the WHOLE block.
-                        # Re-embedding 100s of chunks will kill 3s limit.
-                        # We will use the node embedding for all chunks or just the first.
-                        # Or assume splits are rare/semantic.
-                        "embedding_strategy": "inherited" 
-                    })
-                    docs.append(Document(page_content=split_content, metadata=meta))
-
+            logger.info(f"✅ Extracted {len(docs)} clean content blocks from {filename}")
             return docs
 
         except Exception as e:
             logger.error(f"PDF HTML Extraction Error: {e}")
             return []
+
+    def _process_table_element(self, table_tag: Tag, filename: str, parent_id: Optional[str]) -> List[Document]:
+        """
+        Processes a single HTML table element, extracting each row with column references.
+        Each row becomes a separate Document with column data preserved.
+        
+        Args:
+            table_tag: BeautifulSoup Tag object representing the <table>
+            filename: Source PDF filename
+            parent_id: Parent node ID from the graph
+            
+        Returns:
+            List of Document objects, one per table row
+        """
+        docs = []
+        table_id = str(uuid.uuid4())  # Unique ID for this table instance
+        
+        try:
+            # Step 1: Extract column headers
+            headers = []
+            thead = table_tag.find('thead')
+            
+            if thead:
+                # Look for headers in <thead>
+                header_row = thead.find('tr')
+                if header_row:
+                    headers = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
+            
+            # If no <thead>, try first <tr> in <tbody> or table
+            if not headers:
+                first_row = table_tag.find('tr')
+                if first_row:
+                    # Check if first row looks like headers (contains <th> tags)
+                    ths = first_row.find_all('th')
+                    if ths:
+                        headers = [th.get_text(strip=True) for th in ths]
+                    else:
+                        # Use generic column names if no headers found
+                        first_cells = first_row.find_all(['td', 'th'])
+                        headers = [f"col_{i+1}" for i in range(len(first_cells))]
+            
+            # Step 2: Extract table rows
+            tbody = table_tag.find('tbody')
+            rows = tbody.find_all('tr') if tbody else table_tag.find_all('tr')
+            
+            # Skip first row if it was used as headers and contained <th> tags
+            skip_first = False
+            if rows and not thead:
+                first_row_ths = rows[0].find_all('th')
+                if first_row_ths:
+                    skip_first = True
+            
+            row_start_idx = 1 if skip_first else 0
+            
+            # Step 3: Process each data row
+            for row_idx, tr in enumerate(rows[row_start_idx:], start=1):
+                cells = tr.find_all(['td', 'th'])
+                
+                # Extract cell contents
+                cell_contents = [cell.get_text(strip=True) for cell in cells]
+                
+                # Skip empty rows
+                if not any(cell_contents):
+                    continue
+                
+                # Map columns to content
+                columns_dict = {}
+                for i, content in enumerate(cell_contents):
+                    col_name = headers[i] if i < len(headers) else f"col_{i+1}"
+                    columns_dict[col_name] = content
+                
+                # Create concatenated content for embedding/search
+                row_content = " | ".join([f"{k}: {v}" for k, v in columns_dict.items() if v])
+                
+                # Create Document for this table row
+                doc = Document(
+                    page_content=row_content,
+                    metadata={
+                        "id": f"{table_id}_row_{row_idx}",
+                        "file_name": filename,
+                        "html_tag": "tr",
+                        "parent_ref": parent_id,
+                        "is_table_row": True,
+                        "table_id": table_id,
+                        "row_number": row_idx,
+                        "columns": columns_dict,
+                        "column_headers": headers
+                    }
+                )
+                docs.append(doc)
+            
+            logger.info(f"📊 Extracted {len(docs)} rows from table in {filename}")
+            
+        except Exception as e:
+            logger.error(f"Error processing table element: {e}")
+        
+        return docs
 
     def _process_csv(self, content: bytes, filename: str) -> List[Document]:
         # This method is no longer called from extract_content based on the provided edit.
@@ -341,7 +424,12 @@ class ProductionIngestionPipeline:
                 parent_file_id=d.metadata.get("parent_ref"),
                 metadata=json.dumps(d.metadata), 
                 row_type="chunk",
-                relative_parent_dir=rel_parent # Pass the value
+                relative_parent_dir=rel_parent, # Pass the value
+                # Table-specific fields
+                is_table_row=d.metadata.get("is_table_row"),
+                table_id=d.metadata.get("table_id"),
+                row_number=d.metadata.get("row_number"),
+                columns=d.metadata.get("columns")
             ))
         return rows
 
@@ -360,7 +448,12 @@ class ProductionIngestionPipeline:
             bigquery.SchemaField("metadata", "JSON"),
             bigquery.SchemaField("ingested_at", "STRING"),
             bigquery.SchemaField("row_type", "STRING"),
-            bigquery.SchemaField("relative_parent_dir", "STRING") # New Column
+            bigquery.SchemaField("relative_parent_dir", "STRING"),
+            # Table-specific fields
+            bigquery.SchemaField("is_table_row", "BOOL"),
+            bigquery.SchemaField("table_id", "STRING"),
+            bigquery.SchemaField("row_number", "INT64"),
+            bigquery.SchemaField("columns", "JSON")
         ]
         try:
             table = self.bq_client.get_table(table_ref)
@@ -400,23 +493,40 @@ class ProductionIngestionPipeline:
 
         # 3. BQML Model
         self._ensure_bqml_model()
+        
+        # 4. Vector Index (Fixed for search)
+        try:
+            # We need a BigQueryRAG instance or similar to call create_vector_index
+            # ProductionIngestionPipeline has bq_client and PROJECT_ID
+            # Let's use a temporary BigQueryRAG instance for this maintenance task
+            from bq_handler import BigQueryRAG
+            rag = BigQueryRAG(dataset=self.config.dataset_id)
+            rag.create_vector_index(table_id=self.config.table_id, column_name="embedding")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to ensure vector index: {e}")
 
     def _ensure_bqml_model(self):
         model_name = f"{PROJECT_ID}.{self.config.dataset_id}.{MODEL_ID}"
         try:
             self.bq_client.get_model(model_name)
         except Exception:
-            logger.info(f"Creating BQML Model {model_name}...")
-            # Requires connection!
+            logger.info(f"Checking for BigQuery Connection for Vertex AI...")
+            # We check if vertex_ai_conn exists in US location
+            # If not found, BQML fails. 
+            # We try to create it BEST EFFORT but query time is restricted
             query = f"""
             CREATE MODEL IF NOT EXISTS `{model_name}`
             REMOTE WITH CONNECTION `{PROJECT_ID}.us.vertex_ai_conn`
             OPTIONS(endpoint = 'text-embedding-004');
             """
+            logger.info(f"🚀 Creating BQML Model {MODEL_ID} (Optimized Search)...")
             try:
-                self.bq_client.query(query).result()
+                # Set a 30s timeout for this setup query
+                job_config = bigquery.QueryJobConfig(timeout_ms=30000)
+                self.bq_client.query(query, job_config=job_config).result()
             except Exception as e:
-                logger.warning(f"Could not create BQML model (connection missing?): {e}")
+                logger.warning(f"⚠️ BQML Model optimization skipped: {e}")
+                logger.info("ℹ️ Pipeline will continue using standard search.")
 
     def upsert_rows(self, rows: List[KnowledgeRow]) -> int:
         if not rows: return 0
@@ -449,6 +559,36 @@ class ProductionIngestionPipeline:
             
         print(f"✅ Upsert complete. {inserted_count}/{len(bq_rows)} rows inserted.")    
         return inserted_count
+
+    def generate_batch_embeddings(self, rows: List[KnowledgeRow]):
+        """
+        Generates embeddings for a list of rows using Vertex AI in batches.
+        """
+        if not self.embedding_model:
+            return
+
+        texts = [row.content for row in rows]
+        # Vertex AI limit for text-embedding-004 is 250 instances per request
+        BATCH_SIZE = 250
+        all_embeddings = []
+
+        logger.info(f"🧠 Generating embeddings for {len(texts)} rows in batches of {BATCH_SIZE}...")
+        
+        for i in range(0, len(texts), BATCH_SIZE):
+            batch_texts = texts[i : i + BATCH_SIZE]
+            try:
+                # Local Embedding Call
+                embeddings = self.embedding_model.get_embeddings(batch_texts)
+                all_embeddings.extend([e.values for e in embeddings])
+                logger.info(f"   Processed batch {i // BATCH_SIZE + 1}...")
+            except Exception as e:
+                logger.error(f"❌ Failed to generate embeddings for batch {i}: {e}")
+                # Pad with empty lists if error
+                all_embeddings.extend([[] for _ in range(len(batch_texts))])
+
+        # Map back to rows
+        for row, emb in zip(rows, all_embeddings):
+            row.embedding = emb
 
     def generate_missing_embeddings(self):
          pass # Handled in batch

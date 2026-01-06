@@ -1,20 +1,21 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name="bq-toolbox-cli",
     version="1.0.0",
-    py_modules=["cli", "remote_engine", "speech_handler", "ip_manager"],
+    packages=find_packages(include=["toolbox_cli", "toolbox_cli.*"]),
     install_requires=[
         "typer",
         "rich",
         "httpx",
         "websockets",
         "SpeechRecognition",
-        "pyttsx3"
+        "pyttsx3",
+        "ray" # Optional but listed
     ],
     entry_points={
         "console_scripts": [
-            "bq-toolbox=cli:main",
+            "bq-toolbox=toolbox_cli.main:app",
         ],
     },
 )

@@ -2,17 +2,41 @@
 
 def get_classification_prompt(user_input: str) -> str:
     return f"""
-    Classify the following user input into one of these categories:
-    1. query_similarity_search: User seeks a specific item or document based on its content (e.g., "Find a book about X", "What do we know about Y?").
-    2. query_sql_generation: User asks questions requiring data aggregation, multi-row analysis, or calculation (e.g. "How many x items sold last year", "Count the number of nodes").
-    3. add_table: User specifically asks to create a new table, add a table.
-    4. query_non_db_chat: User asks general, meta, or follow-up questions that do not require BigQuery data.
-    5. upload_by_path: User requests data upload from a given path
+    You are an intent classifier.
     
-    User Input: {user_input}
+    Classify the user input into EXACTLY ONE of the following categories.
+    
+    IMPORTANT RULES:
+    - Choose "query_similarity_search" ONLY if the user clearly names
+      a topic, entity, document, or subject to search for.
+    - If the input is vague, contextual, conversational, or does NOT
+      specify what to search for, it is NOT a similarity search.
+    - Questions like "what is this?", "what can I do here?",
+      "explain this", or unclear references MUST be "query_non_db_chat".
+    
+    Categories:
+    
+    1. query_similarity_search
+       - User explicitly asks to find information ABOUT a named topic,
+         document, concept, or entity.
+    
+    2. query_sql_generation
+       - User asks for aggregation, calculations, filtering,
+         summaries, or analysis over stored data.
+    
+    3. add_table
+       - User explicitly asks to create or add a database table.
+    
+    4. query_non_db_chat
+       - Vague, conversational, unclear, or non-database-related input.
+       - Includes questions without a clear search target.
+    
+    User Input:
+    {user_input}
     
     Return ONLY the category name.
     """
+
 
 def get_table_filter_prompt(user_input: str, all_tables: str) -> str:
     return f"""
@@ -86,9 +110,10 @@ def get_platform_help_prompt(user_input: str) -> str:
     **Instructions:**
     1. Answer the user's question **only** if it relates to the platform, its usage, or best practices.
     2. **DO NOT** attempt to answer questions about specific documents, files, or data in the Knowledge Base (you do not have access to them in this mode).
-    3. If the user asks about their data (e.g. "What is in file X?"), politely guide them to use a search command (e.g. "You can ask 'Find info about X'").
-    4. If the user asks general world knowledge questions (e.g. "What is an iPod?"), politely redirect them to how they could *ingest* information about that topic into the platform, or answer very briefly and pivot back to the platform.
-    5. Be helpful, professional, and concise.
+    3. If the user input is nonsense, gibberish (e.g. "asdfgh"), or completely irrelevant, respond with a friendly follow-up question like: "I'm not sure I understood that correctly. Did you want to search your knowledge base, analyze data, or learn how to ingest new files? I'm here to help!"
+    4. If the user asks about their data (e.g. "What is in file X?"), politely guide them to use a search command (e.g. "You can ask 'Find info about X'").
+    5. If the user asks general world knowledge questions (e.g. "What is an iPod?"), politely redirect them to how they could *ingest* information about that topic into the platform, or answer very briefly and pivot back to the platform.
+    6. Be helpful, professional, and concise.
 
     User Question: "{user_input}"
     """

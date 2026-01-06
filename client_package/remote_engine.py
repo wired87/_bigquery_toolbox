@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 
 # Local imports for client-side processing
 try:
-    from file_processor import FileProcessor
+    from .processor import FileProcessor
 except ImportError:
     FileProcessor = None  # Fallback if dependencies missing
 
@@ -22,7 +22,7 @@ except ImportError:
 logger = logging.getLogger("remote_engine")
 
 class RemoteEngine:
-    def __init__(self, credentials_path: str = "credentials.json", require_auth: bool = True, server_url: str = "http://localhost:8000"):
+    def __init__(self, credentials_path: Optional[str] = None, require_auth: bool = True, server_url: str = "http://localhost:8000"):
         self.server_url = os.getenv("SERVER_URL", server_url)
         env_ws_url = os.getenv("WS_URL")
         

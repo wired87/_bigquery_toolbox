@@ -4,44 +4,34 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
 class ChatHistoryDB:
-    def __init__(self, db_path: str = "chat_history.db"):
-        self.db_path = db_path
-        self._init_db()
-
-    def _init_db(self):
-        """Initialize the SQLite database schema."""
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.error(f"Failed to init chat history DB: {e}")
+    """
+    Session-based chat history manager.
+    History is stored in memory and cleared when the session ends.
+    """
+    def __init__(self, db_path: str = None):
+        """
+        Initialize with in-memory storage.
+        db_path parameter is kept for backward compatibility but ignored.
+        """
+        # In-memory storage: {session_id: [{"role": str, "content": str, "timestamp": datetime}]}
+        self._sessions = defaultdict(list)
+        logger.info("Chat history initialized (session-based, in-memory)")
 
     def add_message(self, session_id: str, role: str, content: str):
-        """Add a message to the history."""
+        """Add a message to the session history."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO history (session_id, role, content) VALUES (?, ?, ?)",
-                (session_id, role, content)
-            )
-            conn.commit()
-            conn.close()
+            message = {
+                "role": role,
+                "content": content,
+                "timestamp": datetime.now()
+            }
+            self._sessions[session_id].append(message)
+            logger.debug(f"Added {role} message to session {session_id}")
         except Exception as e:
             logger.error(f"Failed to add message to history: {e}")
 
@@ -51,20 +41,11 @@ class ChatHistoryDB:
         Limit 6 messages = 3 QA pairs.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            
-            # Get last N *descending*, then reverse
-            cursor.execute(
-                "SELECT role, content FROM history WHERE session_id = ? ORDER BY id DESC LIMIT ?",
-                (session_id, limit)
-            )
-            rows = cursor.fetchall()
-            conn.close()
-            
-            history = [{"role": row["role"], "content": row["content"]} for row in rows]
-            return history[::-1] # Return in chronological order
+            session_messages = self._sessions.get(session_id, [])
+            # Get last N messages
+            recent = session_messages[-limit:] if len(session_messages) > limit else session_messages
+            # Return only role and content (strip timestamp)
+            return [{"role": msg["role"], "content": msg["content"]} for msg in recent]
         except Exception as e:
             logger.error(f"Failed to get history: {e}")
             return []
@@ -83,3 +64,19 @@ class ChatHistoryDB:
             formatted.append(f"{role_prefix}: {msg['content']}")
         
         return "\n".join(formatted)
+    
+    def clear_session(self, session_id: str):
+        """
+        Clear all history for a specific session.
+        Called when user exits/quits.
+        """
+        if session_id in self._sessions:
+            msg_count = len(self._sessions[session_id])
+            del self._sessions[session_id]
+            logger.info(f"Cleared session {session_id} ({msg_count} messages)")
+        else:
+            logger.debug(f"Session {session_id} already empty")
+    
+    def get_session_count(self, session_id: str) -> int:
+        """Get the number of messages in a session."""
+        return len(self._sessions.get(session_id, []))

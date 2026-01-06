@@ -25,7 +25,8 @@ class BQGroundZero:
         self.bqclient = bigquery.Client()
         self.pid = self.bqclient.project
         self.ds_id = dataset_id or BQ_DATASET_ID
-        self.ds_ref = f"{self.pid}.{self.ds_id}"
+        self.base_path = f"{self.pid}.{self.ds_id}"
+        self.ds_ref = self.base_path
         self.ensure_dataset_exists()
 
     def ensure_dataset_exists(self, ds_name=None):
@@ -72,17 +73,10 @@ class BQGroundZero:
           UPDATE SET
             T.column1 = S.column1,
             T.column2 = S.column2,
-            -- Update other columns as needed
-            T.last_updated = CURRENT_TIMESTAMP() -- Example: update a timestamp
+            T.last_updated = CURRENT_TIMESTAMP() 
         WHEN NOT MATCHED THEN
-          INSERT (nid, column1, column2, ...)
-          VALUES (S.nid, S.column1, S.column2, ...);
-        
-                q_types = ""
-        for k, v in schema.items():
-            bq_type = f"{v},"
-            bq_types += bq_type
-        bq_types=bq_types[:-1]
+          INSERT (nid, column1, column2)
+          VALUES (S.nid, S.column1, S.column2);
         """
 
     def upsert_row_query(self, table_id: str, rows: list[dict], schema: dict[str]) -> str:
@@ -376,7 +370,7 @@ class BQCore(BQGroundZero):
 
     def get_tables(self) -> List[str]:
         tables = []
-        for table in self.bqclient.list_tables(self.dataset):
+        for table in self.bqclient.list_tables(self.ds_id):
             tables.append(table.table_id)
 
         return tables
@@ -422,12 +416,14 @@ class BQCore(BQGroundZero):
                 print(f"schema received: {schema}")
                 return schema
             except Exception as e:
-                print("table name not exists", e)
+                print(f"table {table_name} not found or error: {e}. Attempting creation...")
+                # Ensure the table is created with default schema if missing
                 self.get_create_bq_table(
                     table_name=table_name,
-                    ttype="edge" if any(c.islower() for c in table_name) else "node",
-                    schema_fetch=False
+                    ttype="edge" if any(c.islower() for c in table_name) else "node"
                 )
+                # Re-try getting schema after creation
+                return self.bq_get_table_schema(table_name)
 
 
     def update_bq_schema(self, table, rows):
@@ -853,7 +849,7 @@ class BigQueryGraphHandler(BQCore):
 
 import typing
 from typing import List, Optional
-from google.cloud.bigquery import ScalarQueryParameter # Import for explicit parameter typing
+from google.cloud.bigquery import ScalarQueryParameter, ArrayQueryParameter # Import for explicit parameter typing
 
 
 class BigQueryRAG(BQCore):  # Inherit from BigQueryLoader if you have one
@@ -867,15 +863,15 @@ class BigQueryRAG(BQCore):  # Inherit from BigQueryLoader if you have one
         self.project = self.pid
         self.base_path=f"{self.pid}.{self.ds_id}"
 
-
+    # inlude ping 
     def bigquery_vector_search(
         self,
         data: typing.Any, # Can be text for custom=False, or already embedded data if custom=True
         table_id: str,
         custom: bool = True,
         limit: int = 10,
-        select: List[str] = ["nid"],
-        embed_column: str = "embed", # BigQuery terminology often uses 'column'
+        select: List[str] = ["id", "content", "file_id"],
+        embed_column: str = "embedding", # Standardized column name
         model_name: Optional[str] = None # Required if custom=False
     ) -> List[typing.Dict]:
         """
@@ -925,7 +921,8 @@ class BigQueryRAG(BQCore):  # Inherit from BigQueryLoader if you have one
             LIMIT @limit;
             """
             # BigQuery uses ARRAY<FLOAT64> for vector embeddings
-            query_parameters.append(ScalarQueryParameter("query_embedding", "ARRAY<FLOAT64>", data))
+            # Use ArrayQueryParameter for array types, not ScalarQueryParameter
+            query_parameters.append(ArrayQueryParameter("query_embedding", "FLOAT64", data))
             query_parameters.append(ScalarQueryParameter("limit", "INT64", limit))
 
         else:
@@ -962,9 +959,10 @@ class BigQueryRAG(BQCore):  # Inherit from BigQueryLoader if you have one
 
         print("Executing BigQuery SQL:")
         print(query)
-        print("Parameters:", [(p.name, p.type, p.value) for p in query_parameters])
 
-        query_job = self.bqclient.query(query, parameters=query_parameters)
+        # Configure the query job with parameters
+        job_config = bigquery.QueryJobConfig(query_parameters=query_parameters)
+        query_job = self.bqclient.query(query, job_config=job_config)
         return [dict(row) for row in query_job.result()]
 
     def generate_embeddings(self, table_id: str, content_column: str = "content", embed_column: str = "embed", model_name: str = "text-embedding-004"):
@@ -1113,6 +1111,26 @@ class BigQueryRAG(BQCore):  # Inherit from BigQueryLoader if you have one
 
         print(f"BigQuery ML model {full_model_path} created successfully.")
         return f"BigQuery ML model {full_model_path} created successfully."
+
+    def create_vector_index(self, table_id: str, column_name: str = "embedding"):
+        """
+        Creates a vector index (IVF) on the specified column to accelerate vector search.
+        Required for large datasets to perform efficient similarity search.
+        """
+        full_table_path = f"`{self.base_path}.{table_id}`"
+        index_name = f"{table_id}_{column_name}_idx"
+        
+        query = f"""
+        CREATE OR REPLACE VECTOR INDEX `{index_name}`
+        ON {full_table_path}({column_name})
+        OPTIONS(distance_type='COSINE', index_type='IVF');
+        """
+        print(f"🚀 Creating Vector Index on {full_table_path}...")
+        try:
+            self.run_query(query)
+            print(f"✅ Vector index {index_name} created.")
+        except Exception as e:
+            print(f"⚠️ Vector index creation warning (safe to ignore if already exists or table small): {e}")
 
 
 

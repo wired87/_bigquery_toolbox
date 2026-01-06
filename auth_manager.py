@@ -23,8 +23,10 @@ class AuthManager:
         Lowercase, strip, replace [^a-z0-9] with _.
         """
         norm_email = email.lower().strip()
-        # User specified: only a-z, 0-9 allowed, rest is _
+        # BigQuery dataset IDs: [a-zA-Z0-9_], but MUST start with letter or underscore
         user_id = re.sub(r'[^a-z0-9]', '_', norm_email)
+        if user_id[0].isdigit():
+            user_id = "_" + user_id
         return user_id
 
     def create_user_dataset(self, email: str, password: str, user_id: str) -> Dict[str, Any]:
@@ -51,9 +53,9 @@ class AuthManager:
             
             self.bq_client.create_dataset(dataset, exists_ok=False)
             
-            # 2. Create 'kb' table (Knowledge Base)
+            # 2. Create 'KB' table (Knowledge Base)
             # We create a minimal schema, Pipeline will evolve it
-            kb_ref = f"{dataset_ref}.kb"
+            kb_ref = f"{dataset_ref}.KB"
             kb_schema = [
                 bigquery.SchemaField("id", "STRING", mode="REQUIRED"),
                 bigquery.SchemaField("content", "STRING"),
@@ -62,8 +64,8 @@ class AuthManager:
             kb_table = bigquery.Table(kb_ref, schema=kb_schema)
             self.bq_client.create_table(kb_table)
             
-            # 3. Create 'metadata' table
-            meta_ref = f"{dataset_ref}.metadata"
+            # 3. Create 'METADATA' table
+            meta_ref = f"{dataset_ref}.METADATA"
             meta_schema = [
                 bigquery.SchemaField("key", "STRING"),
                 bigquery.SchemaField("value", "STRING"),

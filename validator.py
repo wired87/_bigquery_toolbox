@@ -96,9 +96,19 @@ class ToolRegistry:
     def start_env_scanner(cls):
         """
         Starts a background thread to scan environment variables for 'RELAY_' packages.
+        Notifies global registry when new packages are discovered.
         """
         def scanner_loop():
             processed_keys = set()
+            
+            # Import here to avoid circular dependency
+            try:
+                from rag.global_registry import GlobalRAGRegistry
+                has_registry = True
+            except ImportError:
+                logger.warning("RAG Registry not available. RELAY notifications disabled.")
+                has_registry = False
+            
             while True:
                 try:
                     for key, value in os.environ.items():
@@ -124,6 +134,29 @@ class ToolRegistry:
                                 # Update active validators
                                 for v in cls._validators:
                                     v.register_case(new_case)
+                                
+                                # Notify global registry asynchronously
+                                if has_registry:
+                                    relay_info = {
+                                        'env_key': key,
+                                        'key': new_case.key,
+                                        'description': new_case.description,
+                                        'pattern': new_case.pattern,
+                                        'priority': new_case.priority,
+                                        'action': new_case.action,
+                                        'timestamp': time.time()
+                                    }
+                                    
+                                    # Run async notification in new event loop (scanner is sync thread)
+                                    try:
+                                        loop = asyncio.new_event_loop()
+                                        asyncio.set_event_loop(loop)
+                                        loop.run_until_complete(
+                                            GlobalRAGRegistry.notify_relay_discovered(relay_info)
+                                        )
+                                        loop.close()
+                                    except Exception as notify_error:
+                                        logger.error(f"Failed to notify registry: {notify_error}")
                                     
                             except json.JSONDecodeError:
                                 logger.warning(f"Invalid JSON in {key}: {value}")
@@ -138,6 +171,7 @@ class ToolRegistry:
         t = threading.Thread(target=scanner_loop, daemon=True)
         t.start()
         logger.info("📡 RELAY Env Scanner started.")
+
 
 class QueryValidator:
     """

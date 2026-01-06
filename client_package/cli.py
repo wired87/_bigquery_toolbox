@@ -4,19 +4,19 @@ import os
 import traceback
 from typing import Optional
 
-from remote_engine import RemoteEngine as CoreEngine
-from rich_manager import ui
+from .remote_engine import RemoteEngine as CoreEngine
+from .rich_manager import ui
 from rich.prompt import Prompt, Confirm, IntPrompt
 from rich.panel import Panel
 from rich.table import Table
 
 # ip_manager is lightweight, safe to import at top
 try:
-    from ip_manager import ip_manager
+    from .ip_manager import ip_manager
 except ImportError:
     ip_manager = None 
 
-from speech_handler import SpeechHandler
+from .speech_handler import SpeechHandler
 
 app = typer.Typer()
 
