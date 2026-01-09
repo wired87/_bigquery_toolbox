@@ -106,6 +106,17 @@ class CoreEngine:
         
         # Tools
         self.tools = self.get_bq_tools()
+        
+        # Initialize Case Handlers
+        from client_package.cases.vector import VectorHandler
+        from client_package.cases.sql import SQLHandler
+        from client_package.cases.ingest import IngestHandler
+        from client_package.cases.general import GeneralHandler
+        
+        self.vector_handler = VectorHandler(self)
+        self.sql_handler = SQLHandler(self)
+        self.ingest_handler = IngestHandler(self)
+        self.general_handler = GeneralHandler(self)
     
     def clear_history(self):
         """
@@ -273,58 +284,12 @@ class CoreEngine:
             logger.warning(f"Could not retrieve existing filenames: {e}")
             return set()
 
+    # Delegated to IngestHandler
     def ingest_data(self, table_name: str = "nodes"):
         """
         Ingests data from data_dir using the Production Ingestion Pipeline.
         """
-        if not os.path.exists(DATA_DIR):
-            os.makedirs(DATA_DIR)
-            return
-
-        files = glob.glob(os.path.join(DATA_DIR, "*"))
-        if not files:
-            logger.warning("⚠️  No files found in data_dir.")
-            return
-
-        logger.info(f"📂 Found {len(files)} files to ingest via Production Pipeline...")
-        
-        # We need async here to call the pipeline
-        # But ingest_data is currently synchronous and called from CLI sync context
-        # We will wrap it in asyncio.run if there is no running loop, or create a task
-        
-        async def run_pipeline_batch():
-            from ingestion_pipeline import ProductionIngestionPipeline, PipelineConfig
-            config = PipelineConfig(
-                chunk_size=1000,
-                chunk_overlap=200,
-                use_docai=True
-            )
-            pipeline = ProductionIngestionPipeline(config)
-            
-            for f in files:
-                logger.info(f"  👉 Processing {os.path.basename(f)}...")
-                try:
-                    with open(f, "rb") as file_obj:
-                         content = file_obj.read()
-                    
-                    msg = await pipeline.run_pipeline_for_bytes(os.path.basename(f), content)
-                    logger.info(f"     ✅ {msg}")
-                except Exception as e:
-                    logger.error(f"     ❌ Failed: {e}")
-
-        try:
-             loop = asyncio.get_event_loop()
-             if loop.is_running():
-                 # We are likely in a server context, but ingest_data is typically a CLI/Startup command.
-                 # If called from CLI (sync), this branch won't hit.
-                 # If called from async server, we should await it, but specific method signature is sync.
-                 # Let's create a task
-                 asyncio.create_task(run_pipeline_batch())
-             else:
-                 loop.run_until_complete(run_pipeline_batch())
-        except RuntimeError:
-             # No loop running
-             asyncio.run(run_pipeline_batch())
+        return self.ingest_handler.ingest_data(DATA_DIR)
 
 
     def setup_credentials(self, path: str):
@@ -779,81 +744,18 @@ class CoreEngine:
                 "traceability": None
             }
 
+            # Dispatch to cases logic using initialized handlers
             if intent == "query_similarity_search":
-                logger.info("📊 Starting vector search workflow")
-                await update_status("🔍 Performing vector search...", "search")
-                # We use the REWRITTEN query for the tool call
-                logger.debug(f"Calling Gemini for vector search with tools (timeout: 90s)...")
-                try:
-                    response = await asyncio.wait_for(
-                        self.chat_session.send_message_async(
-                            f"User wants to find items: {user_input}. Use vector_search tool if appropriate. Default table is 'KB'.",
-                            tools=[self.tools]
-                        ),
-                        timeout=90.0
-                    )
-                    await update_status("✨ Generating response...", "generate")
-                    result["response_text"] = await self.handle_model_response(response)
-                    logger.info(f"✅ Vector search completed ({len(result['response_text'])} chars)")
-                except asyncio.TimeoutError:
-                    error_msg = "Vector search TIMED OUT after 90s"
-                    logger.error(error_msg)
-                    await update_status("⏰ Search timed out", "error")
-                    result["response_text"] = "The search operation timed out. Please try a more specific query."
-                except Exception as e:
-                    error_msg = log_exception(e, "Vector Search")
-                    await update_status(f"❌ Search failed: {type(e).__name__}", "error")
-                    result["response_text"] = f"Search failed: {str(e)}"
+                result = await self.vector_handler.handle(user_input, update_status)
                 
             elif intent == "query_sql_generation":
-                logger.info("📊 Starting SQL generation workflow")
-                await update_status("📊 Analyzing database schema...", "schema")
-                try:
-                    # We use the REWRITTEN query for SQL generation
-                    sql_result = await self.handle_sql_generation(user_input, status_callback)
-                    result.update(sql_result)
-                    logger.info(f"✅ SQL generation completed")
-                except Exception as e:
-                    error_msg = log_exception(e, "SQL Generation")
-                    await update_status(f"❌ SQL generation failed", "error")
-                    result["response_text"] = f"SQL generation failed: {str(e)}"
+                result = await self.sql_handler.handle(user_input, update_status)
                     
             elif intent == "upload_by_path":
-                logger.info("📂 Processing file upload")
-                # Attempt to ingest from path mentioned in user input
-                await update_status("📂 Detecting path and starting ingestion...", "ingest")
-                try:
-                    ingest_res = await self.ingest_from_path(user_input, status_callback)
-                    result["response_text"] = ingest_res.get("response_text", "Ingestion started.")
-                    if "traceability" in ingest_res:
-                        result["traceability"] = ingest_res["traceability"]
-                    logger.info("✅ File upload completed")
-                except Exception as e:
-                    error_msg = log_exception(e, "File Upload")
-                    await update_status(f"❌ Upload failed", "error")
-                    result["response_text"] = f"Upload failed: {str(e)}"
+                result = await self.ingest_handler.handle(user_input, update_status)
 
             else:  # query_non_db_chat
-                logger.info("💬 Starting platform help workflow")
-                await update_status(f"💬 Assisting with platform help...", "chat")
-                help_prompt = prompts.get_platform_help_prompt(user_input)
-                logger.debug(f"Calling Gemini for platform help (timeout: 60s)...")
-                try:
-                    response = await asyncio.wait_for(
-                        self.chat_session.send_message_async(help_prompt),
-                        timeout=60.0
-                    )
-                    result["response_text"] = response.text
-                    logger.info(f"✅ Platform help response received ({len(response.text)} chars)")
-                except asyncio.TimeoutError:
-                    error_msg = "Platform help request TIMED OUT after 60s"
-                    logger.error(error_msg)
-                    await update_status("⏰ Response timed out", "error")
-                    result["response_text"] = "I apologize, but I'm taking too long to respond. Please try rephrasing your question or ask about specific features."
-                except Exception as e:
-                    error_msg = log_exception(e, "Platform Help")
-                    await update_status(f"❌ Error: {type(e).__name__}", "error")
-                    result["response_text"] = f"I encountered an error: {str(e)}. Please try again or ask a different question."
+                result = await self.general_handler.handle(user_input, update_status)
 
             await update_status("✅ Complete!", "done")
             
@@ -935,89 +837,14 @@ class CoreEngine:
                 return candidate.text
         return "I'm sorry, I couldn't generate a response."
 
-    async def handle_sql_generation(self, user_input: str, status_callback=None) -> Dict[str, Any]:
-        """
-        Handles the SQL generation workflow.
-        """
-        async def update_status(message: str, step: str = ""):
-            if status_callback:
-                await status_callback(message, step)
-        
-        # 1. Select Tables (Forced to KB)
-        relevant_tables = ["KB"]
-        
-        # Append dataset ID to make them queryable names for context
-        formatted_table_names = [f"{self.project_id}.{self.current_dataset_id}.KB"]
-        await update_status(f"✅ Selected knowledge base: {formatted_table_names[0]}", "tables_selected")
-        # 3. Get Schemas for Relevant Tables
-        await update_status("📖 Loading schemas...", "load_schema")
-        schemas = {}
-        for t in relevant_tables:
-            # Safely get schema
-            try:
-                if self.bq_core:
-                    schemas[t] = await asyncio.to_thread(self.bq_core.bq_get_table_schema, t)
-                else:
-                    schemas[t] = "Schema unavailable (BQ Core not initialized)"
-            except Exception:
-                schemas[t] = "Schema unavailable"
-            
-        # 4. Generate SQL
-        await update_status("🤖 Generating SQL query...", "generate_sql")
-        prompt = prompts.get_sql_generation_prompt(
-            user_input, 
-            json.dumps(formatted_table_names, indent=2),
-            json.dumps(schemas, indent=2)
-        )
-        
-    
-        # Add timeout protection (60s for SQL generation)
-        response = await asyncio.wait_for(
-            self.model.generate_content_async(prompt),
-            timeout=60.0
-        )
-        sql_query = response.text.replace("```sql", "").replace("```", "").strip()
-        
-        logger.info(f"📝 Generated SQL: {sql_query}")
-        
-        # 5. Execute SQL
-        await update_status("⚡ Executing query on BigQuery...", "execute_query")
-        try:
-            query_result = await asyncio.to_thread(self.bq_core.run_query, sql_query, conv_to_dict=True)
-            
-            # 6. Generate Final Answer
-            await update_status("💭 Formulating answer...", "formulate_answer")
-            answer_prompt = prompts.get_natural_answer_prompt(
-                user_input,
-                sql_query,
-                json.dumps(query_result, default=str)
-            )
-            # Add timeout protection (60s for answer generation)
-            answer_response = await asyncio.wait_for(
-                self.model.generate_content_async(answer_prompt),
-                timeout=60.0
-            )
-            
-            return {
-                "intent": "query_sql_generation",
-                "response_text": answer_response.text,
-                "source_citation": f"BigQuery SQL on {', '.join(relevant_tables)}",
-                "query_result": query_result,  # Add raw results for table display
-                "traceability": {
-                    "original_question": user_input,
-                    "sql_query": sql_query,
-                    "tables_used": relevant_tables,
-                    "result_preview": str(query_result)[:500]
-                }
-            }
-            
-        except Exception as e:
-            return {
-                "intent": "query_sql_generation",
-                "response_text": f"Failed to execute SQL: {e}",
-                "traceability": {
-                    "original_question": user_input,
-                    "sql_query": sql_query,
-                    "error": str(e)
-                }
-            }
+    # Legacy method redirect to IngestHandler (compatibility)
+    async def handle_file_upload(self, *args, **kwargs):
+        return await self.ingest_handler.handle_file_upload(*args, **kwargs)
+
+    # Legacy method redirect to IngestHandler (compatibility)
+    async def ingest_from_path(self, *args, **kwargs):
+        # NOTE: ingest_from_path signature in handler is slightly different or matches?
+        # In handler: ingest_from_path(path_input, status, config)
+        # In engine: ingest_from_path(path_input, status, config)
+        # It matches.
+        return await self.ingest_handler.ingest_from_path(*args, **kwargs)
