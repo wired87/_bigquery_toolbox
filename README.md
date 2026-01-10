@@ -268,6 +268,10 @@ def sql_escape_string(self, s):
 ### High Priority
 
 #### Web Server Integration
+- [ ] **Load Admin Specific Data**
+  - [ ] Load help emails and contact info from `.env`
+  - [ ] Ensure sensitive admin configuration is decoupled from code
+
 - [ ] **REST API Server**
   - [ ] FastAPI/Flask backend
   - [ ] Authentication & authorization (OAuth2, API keys)
