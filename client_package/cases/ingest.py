@@ -1,4 +1,3 @@
-
 import logging
 import asyncio
 import os
@@ -27,16 +26,17 @@ class IngestHandler:
             "traceability": None
         }
 
-        logger.info("📂 Processing file upload")
+        print("📂 Processing file upload")
         await update_status("📂 Detecting path and starting ingestion...", "ingest")
         
         try:
             # Call internal method instead of engine's
             ingest_res = await self.ingest_from_path(user_input, status_callback)
+            print("ingest_res", ingest_res)
             result["response_text"] = ingest_res.get("response_text", "Ingestion started.")
             if "traceability" in ingest_res:
                 result["traceability"] = ingest_res["traceability"]
-            logger.info("✅ File upload completed")
+            print("✅ File upload completed")
             
         except Exception as e:
             log_exception(e, "File Upload")
@@ -153,7 +153,7 @@ class IngestHandler:
         if not os.path.exists(TEMP_STORE): os.makedirs(TEMP_STORE)
         temp_file_path = os.path.join(TEMP_STORE, filename)
 
-        logger.info(f"📂 Handling file upload: {filename} ({len(content)} bytes)")
+        print(f"📂 Handling file upload: {filename} ({len(content)} bytes)")
         
         try:
             with open(temp_file_path, "wb") as f:
@@ -179,12 +179,12 @@ class IngestHandler:
             # Post-ingestion verification
             try:
                 table_id = getattr(self.engine, 'current_table_id', 'KB')
-                query = f"SELECT COUNT(*) as count FROM `{self.engine.project_id}.{self.engine.current_dataset_id}.{table_id}` WHERE file_id = '{filename}'"
+                query = f"SELECT COUNT(*) as count FROM `{self.engine.bqclint.project_id}.{self.engine.current_dataset_id}.{table_id}` WHERE file_id = '{filename}'"
                 results = self.engine.bq_client.query(query).result()
                 for row in results:
                     return f"✅ {result_message} (Verified: {row.count} rows)"
-            except Exception:
-                pass
+            except Exception as e:
+                print("Err", e)
             
             msg = f"✅ {result_message}"
             if filename.lower().endswith(".pdf"):
@@ -192,7 +192,7 @@ class IngestHandler:
             return msg
             
         except Exception as e:
-            logger.error(f"Upload failed: {e}")
+            print(f"Upload failed: {e}")
             return f"❌ Upload failed: {str(e)}"
         
         finally:
@@ -207,7 +207,7 @@ class IngestHandler:
         files = glob.glob(os.path.join(data_dir, "*"))
         if not files: return
 
-        logger.info(f"📂 Found {len(files)} files to ingest...")
+        print(f"📂 Found {len(files)} files to ingest...")
         
         async def run_batch():
             for f in files:
@@ -215,7 +215,7 @@ class IngestHandler:
                 with open(f, "rb") as fo:
                     content = fo.read()
                 msg = await self.handle_file_upload(fname, content)
-                logger.info(f"   {fname}: {msg}")
+                print(f"   {fname}: {msg}")
 
         try:
              loop = asyncio.get_event_loop()

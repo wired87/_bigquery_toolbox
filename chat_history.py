@@ -20,7 +20,7 @@ class ChatHistoryDB:
         """
         # In-memory storage: {session_id: [{"role": str, "content": str, "timestamp": datetime}]}
         self._sessions = defaultdict(list)
-        logger.info("Chat history initialized (session-based, in-memory)")
+        print("Chat history initialized (session-based, in-memory)")
 
     def add_message(self, session_id: str, role: str, content: str):
         """Add a message to the session history."""
@@ -33,7 +33,7 @@ class ChatHistoryDB:
             self._sessions[session_id].append(message)
             logger.debug(f"Added {role} message to session {session_id}")
         except Exception as e:
-            logger.error(f"Failed to add message to history: {e}")
+            print(f"Failed to add message to history: {e}")
 
     def get_recent_history(self, session_id: str, limit: int = 6) -> List[Dict[str, str]]:
         """
@@ -47,7 +47,7 @@ class ChatHistoryDB:
             # Return only role and content (strip timestamp)
             return [{"role": msg["role"], "content": msg["content"]} for msg in recent]
         except Exception as e:
-            logger.error(f"Failed to get history: {e}")
+            print(f"Failed to get history: {e}")
             return []
 
     def get_formatted_history(self, session_id: str, limit: int = 6) -> str:
@@ -73,7 +73,7 @@ class ChatHistoryDB:
         if session_id in self._sessions:
             msg_count = len(self._sessions[session_id])
             del self._sessions[session_id]
-            logger.info(f"Cleared session {session_id} ({msg_count} messages)")
+            print(f"Cleared session {session_id} ({msg_count} messages)")
         else:
             logger.debug(f"Session {session_id} already empty")
     

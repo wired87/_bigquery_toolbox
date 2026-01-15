@@ -41,7 +41,7 @@ class RAGCore:
         self.active_requests = {}
         self.request_counter = 0
         
-        logger.info("✅ RAG Core initialized")
+        print("✅ RAG Core initialized")
     
     async def process(
         self,
@@ -82,7 +82,7 @@ class RAGCore:
             return result
             
         except Exception as e:
-            logger.error(f"RAG processing failed: {e}")
+            print(f"RAG processing failed: {e}")
             self.active_requests[request_id]['status'] = 'failed'
             return {
                 'intent': 'error',

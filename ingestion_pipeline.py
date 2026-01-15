@@ -24,6 +24,8 @@ from langchain_core.documents import Document
 from bs4 import BeautifulSoup, Tag
 from pdfminer.high_level import extract_text_to_fp
 from pdfminer.layout import LAParams
+
+from client_package.processor.main import FileProcessorFacade
 from gutils import GUtils
 
 # Configure Logging
@@ -87,11 +89,12 @@ class ProductionIngestionPipeline:
             global PROJECT_ID
             PROJECT_ID = self.bq_client.project
         except Exception as e:
-            logger.warning(f"⚠️  Failed to init BQ Client in Pipeline: {e}")
+            print(f"⚠️  Failed to init BQ Client in Pipeline: {e}")
             self.bq_client = None
             
         self.docai_client = None
-        
+        self.file_handler = FileProcessorFacade()
+
         # Init DocAI (only if needed)
         if self.config.use_docai and self.config.processor_id:
              pass 
@@ -106,9 +109,9 @@ class ProductionIngestionPipeline:
             try:
                 vertexai.init(project=PROJECT_ID, location="us-central1")
                 self.embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
-                logger.info("✅ Vertex AI Embedding Model (text-embedding-004) initialized.")
+                print("✅ Vertex AI Embedding Model (text-embedding-004) initialized.")
             except Exception as e:
-                logger.warning(f"⚠️  Failed to init Vertex AI: {e}")
+                print(f"⚠️  Failed to init Vertex AI: {e}")
                 self.embedding_model = None
 
         self.start_time = None
@@ -119,18 +122,18 @@ class ProductionIngestionPipeline:
         async def report(msg):
              if status_callback: await status_callback(msg, "pipeline")
 
-        logger.info(f"🚀 Processing file: {filename}")
+        print(f"🚀 Processing file: {filename}")
         
         if not self.bq_client:
-            logger.error("❌ BigQuery client not available. Aborting pipeline.")
+            print("❌ BigQuery client not available. Aborting pipeline.")
             return "Failed: Credentials missing on server."
 
         # 1. Extraction (In-Memory)
         await report(f"📑 Extracting content from {filename}...")
         
-        docs = await self.extract_content(filename, content)
+        docs:list[Document] = self.file_handler.process_bytes(filename, content)
         if not docs:
-            logger.warning(f"No content extracted from {filename}")
+            print(f"No content extracted from {filename}")
             await report("⚠️ No content extracted.")
             return "No content extracted."
 
@@ -156,38 +159,15 @@ class ProductionIngestionPipeline:
         upsert_time = (datetime.now() - upsert_start).total_seconds()
         
         total_time = (datetime.now() - self.start_time).total_seconds()
-        logger.info(f"⏱️ Total processing time: {total_time:.2f}s (Upsert: {upsert_time:.2f}s)")
+        print(f"⏱️ Total processing time: {total_time:.2f}s (Upsert: {upsert_time:.2f}s)")
         
         if total_time > 4: 
-             logger.warning(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
+             print(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
              await report(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
 
         return f"Processed {filename}: Ingested {count} rows."
 
-    async def extract_content(self, filename: str, content: bytes) -> List[Document]:
-        """
-        Routes to DocAI or Standard Loaders based on type.
-        """
-        ext = filename.lower().split('.')[-1]
-        
-        # A. PDF Custom HTMl Extraction
-        if ext == 'pdf':
-             return await self._process_pdf_html(content, filename)
-        
-        # B. DocAI for Images (if still needed) - Removed as per instruction to simplify
-        # C. Standard Handling (CSV/Text) - Removed as per instruction to simplify
-        
-        # D. Default Text / CSV / Code
-        try:
-             text = content.decode('utf-8', errors='ignore')
-             return [Document(
-                 page_content=text, 
-                 metadata={"file_name": filename, "type": "text"}
-             )]
-             
-        except Exception as e:
-             logger.error(f"Text extraction failed: {e}")
-             return []
+
 
     def _get_mime_type(self, ext):
         mimes = {'pdf': 'application/pdf', 'jpg': 'image/jpeg', 'png': 'image/png', 'csv': 'text/csv'}
@@ -204,9 +184,9 @@ class ProductionIngestionPipeline:
                 opts = ClientOptions(api_endpoint=f"{DOCAI_LOCATION}-documentai.googleapis.com")
                 self.docai_client = documentai.DocumentProcessorServiceClient(client_options=opts)
                 self.processor_name = self.docai_client.processor_path(PROJECT_ID, DOCAI_LOCATION, self.config.processor_id)
-                logger.info(f"Using DocAI Processor: {self.config.processor_id}")
+                print(f"Using DocAI Processor: {self.config.processor_id}")
 
-            logger.info(f"Sending {len(content)} bytes to DocAI ({mime_type})...")
+            print(f"Sending {len(content)} bytes to DocAI ({mime_type})...")
             raw_document = documentai.RawDocument(content=content, mime_type=mime_type)
             request = documentai.ProcessRequest(name=self.processor_name, raw_document=raw_document)
             result = self.docai_client.process_document(request=request)
@@ -215,7 +195,7 @@ class ProductionIngestionPipeline:
             return [Document(page_content=document.text, metadata={"file_name": filename, "type": "docai_ocr"})]
             
         except Exception as e:
-            logger.error(f"DocAI Error: {e}")
+            print(f"DocAI Error: {e}")
             return []
 
     async def _process_pdf_html(self, content: bytes, filename: str) -> List[Document]:
@@ -229,20 +209,20 @@ class ProductionIngestionPipeline:
             with io.BytesIO(content) as input_stream:
                 extract_text_to_fp(input_stream, output_string, output_type='html', laparams=LAParams())
             html_content = output_string.getvalue().decode("utf-8")
-            
+
             # 2. Parse & Clean
             soup = BeautifulSoup(html_content, 'html.parser')
-            
+
             # Remove scripts and styles
             for script_or_style in soup(["script", "style"]):
                 script_or_style.decompose()
 
-            gutils = GUtils(project_id=PROJECT_ID) 
+            gutils = GUtils(project_id=PROJECT_ID)
             docs = []
-            
+
             def traverse(tag: Tag, parent_id: Optional[str] = None):
                 if not isinstance(tag, Tag): return
-                
+
                 # Special handling for table elements
                 if tag.name == 'table':
                     table_docs = self._process_table_element(tag, filename, parent_id)
@@ -251,7 +231,7 @@ class ProductionIngestionPipeline:
 
                 # Get clean text content (no HTML/CSS)
                 text_content = tag.get_text(strip=True)
-                
+
                 # Only process tags that have actual text content
                 if text_content:
                     # Save just the clean content and the tag name
@@ -261,21 +241,21 @@ class ProductionIngestionPipeline:
                         content=text_content,
                         parent_id=parent_id,
                         metadata={
-                            "file_name": filename, 
-                            "file_type": "pdf", 
+                            "file_name": filename,
+                            "file_type": "pdf",
                             "tag": tag.name,
-                            "page_number": 1 
+                            "page_number": 1
                         },
                         defer_embedding=True
                     )
-                    
+
                     # Also create Documents for the pipeline flow
                     # If content is long, we split it here
                     if len(text_content) > 200:
                         splits = self.splitter.split_text(text_content)
                     else:
                         splits = [text_content]
-                        
+
                     for i, split in enumerate(splits):
                         docs.append(Document(
                             page_content=split,
@@ -293,11 +273,11 @@ class ProductionIngestionPipeline:
 
             root = soup.body if soup.body else soup
             traverse(root)
-            logger.info(f"✅ Extracted {len(docs)} clean content blocks from {filename}")
+            print(f"✅ Extracted {len(docs)} clean content blocks from {filename}")
             return docs
 
         except Exception as e:
-            logger.error(f"PDF HTML Extraction Error: {e}")
+            print(f"PDF HTML Extraction Error: {e}")
             return []
 
     def _process_table_element(self, table_tag: Tag, filename: str, parent_id: Optional[str]) -> List[Document]:
@@ -390,10 +370,10 @@ class ProductionIngestionPipeline:
                 )
                 docs.append(doc)
             
-            logger.info(f"📊 Extracted {len(docs)} rows from table in {filename}")
+            print(f"📊 Extracted {len(docs)} rows from table in {filename}")
             
         except Exception as e:
-            logger.error(f"Error processing table element: {e}")
+            print(f"Error processing table element: {e}")
         
         return docs
 
@@ -405,7 +385,7 @@ class ProductionIngestionPipeline:
             text = df.to_string(index=False)
             return [Document(page_content=text, metadata={"file_name": filename, "type": "csv"})]
         except Exception as e:
-             logger.error(f"CSV Error: {e}")
+             print(f"CSV Error: {e}")
              return []
 
     def transform_to_rows(self, filename: str, docs: List[Document], metadata: Optional[Dict[str, Any]] = None) -> List[KnowledgeRow]:
@@ -416,7 +396,7 @@ class ProductionIngestionPipeline:
             rows.append(KnowledgeRow(
                 id=d.metadata.get("id", str(uuid.uuid4())), # Use ID from metadata if available (e.g., GNode ID)
                 file_id=filename,
-                file_type="pdf", # Assuming this path is primarily for PDF/HTML or determined by caller
+                file_type=filename.split(".")[-1], # Assuming this path is primarily for PDF/HTML or determined by caller
                 content=d.page_content,
                 embedding=d.metadata.get("embedding"),
                 html_tag=d.metadata.get("html_tag"),
@@ -465,14 +445,14 @@ class ProductionIngestionPipeline:
                     new_fields.append(f)
             
             if new_fields:
-                logger.info(f"Adding {len(new_fields)} new columns to {table_ref}...")
+                print(f"Adding {len(new_fields)} new columns to {table_ref}...")
                 new_schema = table.schema[:] # Copy
                 new_schema.extend(new_fields)
                 table.schema = new_schema
                 self.bq_client.update_table(table, ["schema"])
                 
         except Exception: # Simplification as NotFound might not be imported
-            logger.info(f"Creating table {table_ref}...")
+            print(f"Creating table {table_ref}...")
             t = bigquery.Table(table_ref, schema=schema)
             self.bq_client.create_table(t)
             
@@ -487,7 +467,7 @@ class ProductionIngestionPipeline:
         # try:
         #      self.bq_client.get_table(meta_table_ref)
         # except Exception:
-        #      logger.info(f"Creating table {meta_table_ref}...")
+        #      print(f"Creating table {meta_table_ref}...")
         #      t = bigquery.Table(meta_table_ref, schema=meta_schema)
         #      self.bq_client.create_table(t)
 
@@ -503,14 +483,14 @@ class ProductionIngestionPipeline:
             rag = BigQueryRAG(dataset=self.config.dataset_id)
             rag.create_vector_index(table_id=self.config.table_id, column_name="embedding")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to ensure vector index: {e}")
+            print(f"⚠️ Failed to ensure vector index: {e}")
 
     def _ensure_bqml_model(self):
         model_name = f"{PROJECT_ID}.{self.config.dataset_id}.{MODEL_ID}"
         try:
             self.bq_client.get_model(model_name)
         except Exception:
-            logger.info(f"Checking for BigQuery Connection for Vertex AI...")
+            print(f"Checking for BigQuery Connection for Vertex AI...")
             # We check if vertex_ai_conn exists in US location
             # If not found, BQML fails. 
             # We try to create it BEST EFFORT but query time is restricted
@@ -519,14 +499,14 @@ class ProductionIngestionPipeline:
             REMOTE WITH CONNECTION `{PROJECT_ID}.us.vertex_ai_conn`
             OPTIONS(endpoint = 'text-embedding-004');
             """
-            logger.info(f"🚀 Creating BQML Model {MODEL_ID} (Optimized Search)...")
+            print(f"🚀 Creating BQML Model {MODEL_ID} (Optimized Search)...")
             try:
                 # Set a 30s timeout for this setup query
                 job_config = bigquery.QueryJobConfig(timeout_ms=30000)
                 self.bq_client.query(query, job_config=job_config).result()
             except Exception as e:
-                logger.warning(f"⚠️ BQML Model optimization skipped: {e}")
-                logger.info("ℹ️ Pipeline will continue using standard search.")
+                print(f"⚠️ BQML Model optimization skipped: {e}")
+                print("ℹ️ Pipeline will continue using standard search.")
 
     def upsert_rows(self, rows: List[KnowledgeRow]) -> int:
         if not rows: return 0
@@ -538,7 +518,7 @@ class ProductionIngestionPipeline:
         BATCH_SIZE = 200
         total_batches = (len(bq_rows) + BATCH_SIZE - 1) // BATCH_SIZE
         
-        logger.info(f"📦 Upserting {len(bq_rows)} rows in {total_batches} batches...")
+        print(f"📦 Upserting {len(bq_rows)} rows in {total_batches} batches...")
         
         inserted_count = 0
         
@@ -551,13 +531,13 @@ class ProductionIngestionPipeline:
             try:
                 errors = self.bq_client.insert_rows_json(table_ref, batch)
                 if errors:
-                    logger.error(f"BQ Insert Errors (Batch {i}): {errors}")
+                    print(f"BQ Insert Errors (Batch {i}): {errors}")
                 else:
                     inserted_count += len(batch)
             except Exception as e:
-                logger.error(f"Insert failed (Batch {i}): {e}")
+                print(f"Insert failed (Batch {i}): {e}")
             
-        print(f"✅ Upsert complete. {inserted_count}/{len(bq_rows)} rows inserted.")    
+        print(f"✅ Upsert complete. {inserted_count}/{len(bq_rows)} rows inserted.")
         return inserted_count
 
     def generate_batch_embeddings(self, rows: List[KnowledgeRow]):
@@ -572,7 +552,7 @@ class ProductionIngestionPipeline:
         BATCH_SIZE = 250
         all_embeddings = []
 
-        logger.info(f"🧠 Generating embeddings for {len(texts)} rows in batches of {BATCH_SIZE}...")
+        print(f"🧠 Generating embeddings for {len(texts)} rows in batches of {BATCH_SIZE}...")
         
         for i in range(0, len(texts), BATCH_SIZE):
             batch_texts = texts[i : i + BATCH_SIZE]
@@ -580,9 +560,9 @@ class ProductionIngestionPipeline:
                 # Local Embedding Call
                 embeddings = self.embedding_model.get_embeddings(batch_texts)
                 all_embeddings.extend([e.values for e in embeddings])
-                logger.info(f"   Processed batch {i // BATCH_SIZE + 1}...")
+                print(f"   Processed batch {i // BATCH_SIZE + 1}...")
             except Exception as e:
-                logger.error(f"❌ Failed to generate embeddings for batch {i}: {e}")
+                print(f"❌ Failed to generate embeddings for batch {i}: {e}")
                 # Pad with empty lists if error
                 all_embeddings.extend([[] for _ in range(len(batch_texts))])
 

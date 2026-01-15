@@ -127,7 +127,7 @@ def render():
                         "source_citation": None,
                         "traceability": None
                     }
-
+                    print("process_chat_logic result", result)
                     if intent == "query_similarity_search":
                         result = await engine.vector_handler.handle(user_input, status_cb)
                         

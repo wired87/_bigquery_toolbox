@@ -30,12 +30,7 @@ class BaseProcessor:
         
         return self._structure_docs(docs, filename, category)
 
-    def process_bytes(self, filename: str, content: bytes, category: str = "Document") -> List[Dict[str, Any]]:
-        docs = self.load_from_bytes(filename, content)
-        if not docs:
-            return []
             
-        return self._structure_docs(docs, filename, category)
 
     def _structure_docs(self, docs: List[Document], filename: str, category: str) -> List[Dict[str, Any]]:
         """

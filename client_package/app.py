@@ -75,7 +75,6 @@ def get_core_system():
             rag = RAGCore(engine)
             
             # GlobalServerConfig removed (Serverless mode)
-                
             return rag
     except Exception as e:
         st.error(f"Critical Error Initializing Core: {e}")

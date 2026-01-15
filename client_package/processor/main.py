@@ -1,10 +1,11 @@
 from typing import List, Dict, Any
+
+from langchain_core.documents import Document
 from rich.console import Console
 import os
 
 from .pdf_processor import PdfProcessor
 from .table_processor import TableProcessor
-from .image_processor import ImageProcessor
 from .text_processor import TextProcessor
 
 class FileProcessorFacade:
@@ -12,7 +13,7 @@ class FileProcessorFacade:
         self.console = Console()
         self.pdf_processor = PdfProcessor()
         self.table_processor = TableProcessor()
-        self.image_processor = ImageProcessor()
+        #self.image_processor = ImageProcessor()
         self.text_processor = TextProcessor()
 
     def process_file(self, file_path: str) -> List[Dict[str, Any]]:
@@ -30,7 +31,7 @@ class FileProcessorFacade:
             self.console.print(f"[red]❌ Processing failed for {file_path}: {e}[/red]")
             return []
 
-    def process_bytes(self, filename: str, content: bytes) -> List[Dict[str, Any]]:
+    def process_bytes(self, filename: str, content: bytes) -> List[Document]:
         self.console.print(f"[dim]📄 Processing in-memory file: {filename}...[/dim]")
         
         processor = self._get_processor(filename)
@@ -40,7 +41,7 @@ class FileProcessorFacade:
             rows = processor.process_bytes(filename, content, category=category)
             if rows:
                 self.console.print(f"[green]✓ Generated {len(rows)} structured chunks from {filename}[/green]")
-            return rows
+            return rows #self.pdf_processor._structure_docs(rows, filename, category)
         except Exception as e:
             self.console.print(f"[red]❌ Processing failed for {filename}: {e}[/red]")
             return []

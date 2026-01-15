@@ -22,7 +22,7 @@ def get_classification_prompt(user_input: str) -> str:
     
     2. query_sql_generation
        - User asks for aggregation, calculations, filtering,
-         summaries, or analysis over stored data.
+         summaries, or analysis over stored data, or just general questions over the content/data etc included
     
     3. add_table
        - User explicitly asks to create or add a database table.

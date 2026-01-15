@@ -24,7 +24,7 @@ class GeneralHandler:
             "traceability": None
         }
 
-        logger.info("💬 Starting platform help workflow")
+        print("💬 Starting platform help workflow")
         await update_status(f"💬 Assisting with platform help...", "chat")
         
         help_prompt = prompts.get_platform_help_prompt(user_input)
@@ -35,16 +35,16 @@ class GeneralHandler:
                 timeout=60.0
             )
             result["response_text"] = response.text
-            logger.info(f"✅ Platform help response received ({len(response.text)} chars)")
+            print(f"✅ Platform help response received: {response} ({len(response.text)} chars)")
             
         except asyncio.TimeoutError:
             error_msg = "Platform help request TIMED OUT after 60s"
-            logger.error(error_msg)
+            print(error_msg)
             await update_status("⏰ Response timed out", "error")
             result["response_text"] = "I apologize, but I'm taking too long to respond. Please try rephrasing your question or ask about specific features."
             
         except Exception as e:
-            logger.error(f"❌ Error in general chat: {e}")
+            print(f"❌ Error in general chat: {e}")
             await update_status(f"❌ Error: {type(e).__name__}", "error")
             result["response_text"] = f"I encountered an error: {str(e)}. Please try again or ask a different question."
 

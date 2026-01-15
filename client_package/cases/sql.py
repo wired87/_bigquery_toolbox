@@ -27,13 +27,13 @@ class SQLHandler:
             "traceability": None
         }
 
-        logger.info("📊 Starting SQL generation workflow")
+        print("📊 Starting SQL generation workflow")
         await update_status("📊 Analyzing database schema...", "schema")
         
         try:
             sql_result = await self.handle_sql_generation(user_input, status_callback)
             result.update(sql_result)
-            logger.info(f"✅ SQL generation completed")
+            print(f"✅ SQL generation completed")
             
         except Exception as e:
             log_exception(e, "SQL Generation")
@@ -81,13 +81,17 @@ class SQLHandler:
             timeout=60.0
         )
         sql_query = response.text.replace("```sql", "").replace("```", "").strip()
-        logger.info(f"📝 Generated SQL: {sql_query}")
+        print(f"📝 Generated SQL: {sql_query}")
         
         # 5. Execute SQL
         await update_status("⚡ Executing query on BigQuery...", "execute_query")
         try:
              # Use engine.bq_core to run query
-            query_result = await asyncio.to_thread(self.engine.bq_core.run_query, sql_query, conv_to_dict=True)
+            query_result = await asyncio.to_thread(
+                self.engine.bq_core.run_query,
+                sql_query,
+                conv_to_dict=True
+            )
             
             # 6. Generate Final Answer
             await update_status("💭 Formulating answer...", "formulate_answer")

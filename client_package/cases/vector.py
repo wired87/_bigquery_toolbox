@@ -23,7 +23,7 @@ class VectorHandler:
             "traceability": None
         }
 
-        logger.info("📊 Starting vector search workflow")
+        print("📊 Starting vector search workflow")
         await update_status("🔍 Performing vector search...", "search")
         
         logger.debug(f"Calling Gemini for vector search with tools (timeout: 90s)...")
@@ -38,11 +38,11 @@ class VectorHandler:
             )
             await update_status("✨ Generating response...", "generate")
             result["response_text"] = await self.engine.handle_model_response(response)
-            logger.info(f"✅ Vector search completed ({len(result['response_text'])} chars)")
+            print(f"✅ Vector search completed ({len(result['response_text'])} chars)")
             
         except asyncio.TimeoutError:
             error_msg = "Vector search TIMED OUT after 90s"
-            logger.error(error_msg)
+            print(error_msg)
             await update_status("⏰ Search timed out", "error")
             result["response_text"] = "The search operation timed out. Please try a more specific query."
             

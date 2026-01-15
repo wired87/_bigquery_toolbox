@@ -25,7 +25,7 @@ class SecurityManager:
         except Exception:
             table = bigquery.Table(self.table_ref, schema=schema)
             self.bq_client.create_table(table)
-            logger.info(f"Created table {self.table_ref}")
+            print(f"Created table {self.table_ref}")
 
     def refresh_blacklist(self):
         """Fetches blocked IPs from BigQuery"""
@@ -38,9 +38,9 @@ class SecurityManager:
             rows = self.bq_client.query(query).result()
             self.blocked_ips = {row.ip_address for row in rows}
             self.last_refresh = time.time()
-            logger.info(f"Refreshed blacklist: {len(self.blocked_ips)} IPs blocked.")
+            print(f"Refreshed blacklist: {len(self.blocked_ips)} IPs blocked.")
         except Exception as e:
-            logger.error(f"Failed to refresh blacklist: {e}")
+            print(f"Failed to refresh blacklist: {e}")
 
     def is_blocked(self, ip: str) -> bool:
         self.refresh_blacklist()
@@ -55,6 +55,6 @@ class SecurityManager:
             """
             self.bq_client.query(query).result()
             self.blocked_ips.add(ip)
-            logger.info(f"Blocked IP: {ip}")
+            print(f"Blocked IP: {ip}")
         except Exception as e:
-            logger.error(f"Failed to block IP {ip}: {e}")
+            print(f"Failed to block IP {ip}: {e}")

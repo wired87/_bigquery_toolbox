@@ -12,10 +12,10 @@ class TextProcessor(BaseProcessor):
             self.console.print(f"[red]❌ Error loading Text {file_path}: {e}[/red]")
             return []
 
-    def load_from_bytes(self, filename: str, content: bytes) -> List[Document]:
+    def process_bytes(self, filename: str, content: bytes, category:str) -> List[Document]:
         try:
             text = content.decode("utf-8", errors="ignore")
-            return [Document(page_content=text, metadata={"source": filename})]
+            return [Document(page_content=text, metadata={"source": filename,"category":category})]
         except Exception as e:
             self.console.print(f"[red]❌ Error loading Text bytes for {filename}: {e}[/red]")
             return []

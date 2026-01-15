@@ -106,7 +106,7 @@ class ToolRegistry:
                 from rag.global_registry import GlobalRAGRegistry
                 has_registry = True
             except ImportError:
-                logger.warning("RAG Registry not available. RELAY notifications disabled.")
+                print("RAG Registry not available. RELAY notifications disabled.")
                 has_registry = False
             
             while True:
@@ -129,7 +129,7 @@ class ToolRegistry:
                                 # Add to Arsenal
                                 cls.ARSENAL.append(new_case)
                                 processed_keys.add(key)
-                                logger.info(f"🔌 Discovered Relay Package: {new_case.key}")
+                                print(f"🔌 Discovered Relay Package: {new_case.key}")
                                 
                                 # Update active validators
                                 for v in cls._validators:
@@ -156,21 +156,21 @@ class ToolRegistry:
                                         )
                                         loop.close()
                                     except Exception as notify_error:
-                                        logger.error(f"Failed to notify registry: {notify_error}")
+                                        print(f"Failed to notify registry: {notify_error}")
                                     
                             except json.JSONDecodeError:
-                                logger.warning(f"Invalid JSON in {key}: {value}")
+                                print(f"Invalid JSON in {key}: {value}")
                             except Exception as e:
-                                logger.error(f"Error loading {key}: {e}")
+                                print(f"Error loading {key}: {e}")
                                 
                     time.sleep(5) # Scan interval
                 except Exception as e:
-                    logger.error(f"Scanner thread error: {e}")
+                    print(f"Scanner thread error: {e}")
                     time.sleep(5)
 
         t = threading.Thread(target=scanner_loop, daemon=True)
         t.start()
-        logger.info("📡 RELAY Env Scanner started.")
+        print("📡 RELAY Env Scanner started.")
 
 
 class QueryValidator:
@@ -206,7 +206,7 @@ class QueryValidator:
                 if re.search(case.pattern, clean_query, re.IGNORECASE):
                     return case
             except re.error as e:
-                logger.error(f"Invalid regex for case {case.key}: {e}")
+                print(f"Invalid regex for case {case.key}: {e}")
                 continue
                 
         return None

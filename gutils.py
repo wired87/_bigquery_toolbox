@@ -31,7 +31,7 @@ class GUtils:
         try:
             self.embedding_model = VertexAIEmbeddings(model_name="text-embedding-004", project=project_id)
         except Exception as e:
-            logger.warning(f"Failed to initialize VertexAIEmbeddings: {e}")
+            print(f"Failed to initialize VertexAIEmbeddings: {e}")
 
     def create_node(self, tag_name: str, content: str, parent_id: Optional[str] = None, metadata: Dict = None, defer_embedding: bool = False) -> GNode:
         node_id = str(uuid.uuid4())
@@ -41,7 +41,7 @@ class GUtils:
             try:
                 embedding = self.embedding_model.embed_query(content)
             except Exception as e:
-                logger.error(f"Embedding failed for node {node_id}: {e}")
+                print(f"Embedding failed for node {node_id}: {e}")
         
         node = GNode(
             id=node_id,
@@ -67,7 +67,7 @@ class GUtils:
         Generates embeddings for all nodes that don't have them yet, in batches.
         """
         if not self.embedding_model:
-            logger.warning("No embedding model available, skipping batch generation.")
+            print("No embedding model available, skipping batch generation.")
             return
 
         # Filter nodes that need embeddings and have content
@@ -79,7 +79,7 @@ class GUtils:
         if not nodes_to_embed:
             return
 
-        logger.info(f"Generating embeddings for {len(nodes_to_embed)} nodes in batches of {batch_size}...")
+        print(f"Generating embeddings for {len(nodes_to_embed)} nodes in batches of {batch_size}...")
         
         for i in range(0, len(nodes_to_embed), batch_size):
             batch = nodes_to_embed[i:i + batch_size]
@@ -91,7 +91,7 @@ class GUtils:
                 for node, emb in zip(batch, embeddings):
                     node.embedding = emb
             except Exception as e:
-                logger.error(f"Batch embedding failed for batch {i//batch_size}: {e}")
+                print(f"Batch embedding failed for batch {i//batch_size}: {e}")
 
     def add_edge(self, source_id: str, target_id: str, edge_type: str, weight: float = 1.0):
         self.edges.append({
@@ -170,9 +170,9 @@ class GUtils:
                 net.add_edge(edge['source'], edge['target'], title=f"{edge['type']} (w={edge['weight']:.2f})", color=color)
                 
             net.save_graph(output_file)
-            logger.info(f"Graph visualization saved to {output_file}")
+            print(f"Graph visualization saved to {output_file}")
             
         except ImportError:
-            logger.warning("PyVis not installed. Skipping visualization.")
+            print("PyVis not installed. Skipping visualization.")
         except Exception as e:
-            logger.error(f"Visualization failed: {e}")
+            print(f"Visualization failed: {e}")

@@ -46,15 +46,15 @@ class Interactor:
                             self.urls = fetched_urls
                             return
                     except ValueError:
-                         logger.warning(f"Actor {self.agent_name} not found.")
+                         print(f"Actor {self.agent_name} not found.")
                     except Exception as e:
-                         logger.warning(f"Error communicating with Ray actor: {e}")
+                         print(f"Error communicating with Ray actor: {e}")
             except Exception as e:
-                logger.warning(f"Ray check failed: {e}")
+                print(f"Ray check failed: {e}")
 
         # Fallback to constructing URL from domain
         # If urls list is still empty, we use the domain from .env
-        logger.info("Using domain from .env for connection.")
+        print("Using domain from .env for connection.")
         if "localhost" in self.domain or "127.0.0.1" in self.domain:
              base = f"ws://{self.domain}"
         else:
@@ -88,7 +88,7 @@ class Interactor:
                 )
                 
                 # Connection successful!
-                logger.info(f"✅ Connected to WebSocket at {ws_url}")
+                print(f"✅ Connected to WebSocket at {ws_url}")
                 self.domain = f"127.0.0.1:{port}"
                 connected = True
                 break  # Exit loop on success

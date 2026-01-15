@@ -78,7 +78,7 @@ def log_exception(
     full_msg = format_exception_details(e, context, include_traceback, include_type=True)
     
     # Log it
-    log_func = getattr(logger, level, logger.error)
+    log_func = getattr(logger, level, print)
     log_func(full_msg)
     
     # Return user-friendly version (without full traceback for cleaner UI)
@@ -158,7 +158,7 @@ class DetailedExceptionLogger:
                 include_traceback=True,
                 include_type=True
             )
-            self.logger.error(error_msg)
+            self.print(error_msg)
         else:
             # Successful completion
             self.logger.debug(f"✅ Completed: {self.context}")

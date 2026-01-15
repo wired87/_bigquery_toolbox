@@ -1,32 +1,198 @@
-from typing import List
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_core.documents import Document
+
 import io
+import uuid
+import json
+import logging
+import pandas as pd
+from typing import List, Optional
+from bs4 import BeautifulSoup, Tag
+from pdfminer.high_level import extract_text_to_fp
+from pdfminer.layout import LAParams
+from langchain_core.documents import Document
 
 from .base import BaseProcessor
 
+logger = logging.getLogger(__name__)
+
 class PdfProcessor(BaseProcessor):
     def load_from_path(self, file_path: str) -> List[Document]:
+        # This keeps compatibility with BaseProcessor.process_path
+        # But for the full DataFrame requirement, use extract_to_dataframe
         try:
-            return PyPDFLoader(file_path).load()
+            with open(file_path, "rb") as f:
+                content = f.read()
+            return self._process_pdf_html_to_docs(content, file_path)
         except Exception as e:
             self.console.print(f"[red]❌ Error loading PDF {file_path}: {e}[/red]")
             return []
 
-    def load_from_bytes(self, filename: str, content: bytes) -> List[Document]:
+    def process_bytes(self, filename: str, content: bytes, category:str) -> List[Document]:
+        return self._process_pdf_html_to_docs(content, filename, category)
+
+    def extract_to_dataframe(self, file_path: str, category=None) -> pd.DataFrame:
+        """
+        Extracts content from PDF and returns a pandas DataFrame with SOA structure.
+        """
         try:
-            # Use pypdf directly with BytesIO
-            from pypdf import PdfReader
-            reader = PdfReader(io.BytesIO(content))
-            docs = []
-            for i, page in enumerate(reader.pages):
-                text = page.extract_text()
-                if text:
-                    docs.append(Document(page_content=text, metadata={"page": i, "source": filename}))
-            return docs
-        except ImportError:
-            self.console.print("[red]❌ pypdf not installed.[/red]")
-            return []
+            with open(file_path, "rb") as f:
+                content = f.read()
+            
+            # 1. Get Documents (Nodes)
+            docs = self._process_pdf_html_to_docs(content, file_path)
+            
+            # 2. Convert to SOA Struct / DataFrame List
+            rows = []
+            for d in docs:
+                row = {
+                    "id": d.metadata.get("id", str(uuid.uuid4())),
+                    "content": d.page_content,
+                    "file_name": file_path.split("/")[-1].split("\\")[-1], # Simple basename
+                    "field_type": d.metadata.get("html_tag", "unknown"), # gfiel_type
+                    "content_type": "text" if not d.metadata.get("is_table_row") else "table_row",
+                    "part_type": "chunk", # or logic to determine if it's a whole or part
+                    "category": category, # or logic to determine if it's a whole or part
+                    "parent_id": d.metadata.get("parent_ref"),
+                    "page_number": d.metadata.get("page_number", 1),
+                    "metadata": json.dumps(d.metadata)
+                }
+                rows.append(row)
+            
+            return pd.DataFrame(rows)
+            
         except Exception as e:
-            self.console.print(f"[red]❌ Error loading PDF bytes for {filename}: {e}[/red]")
+            self.console.print(f"[red]❌ Error extracting PDF to DataFrame {file_path}: {e}[/red]")
+            return pd.DataFrame()
+
+    def _process_pdf_html_to_docs(self, content: bytes, filename: str, category=None) -> List[Document]:
+        """
+        Extracts HTML from PDF, cleans tags, and chunks content using LangChain.
+        """
+        try:
+            output_string = io.BytesIO()
+            with io.BytesIO(content) as input_stream:
+                extract_text_to_fp(input_stream, output_string, output_type='html', laparams=LAParams())
+            html_content = output_string.getvalue().decode("utf-8")
+            
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Remove scripts and styles
+            for script_or_style in soup(["script", "style"]):
+                script_or_style.decompose()
+
+            docs = []
+            
+            def traverse(tag: Tag, parent_id: Optional[str] = None):
+                if not isinstance(tag, Tag): return
+                
+                # Special handling for table elements
+                if tag.name == 'table':
+                    table_docs = self._process_table_element(tag, filename, parent_id)
+                    docs.extend(table_docs)
+                    return  # Don't traverse children of table
+
+                # Get clean text content
+                text_content = tag.get_text(strip=True)
+                
+                # Only process tags that have actual text content
+                if text_content:
+                    node_id = str(uuid.uuid4())
+                    
+                    # Split logic using inherited text_splitter_small (LangChain)
+                    if len(text_content) > 200:
+                        splits = self.text_splitter_small.split_text(text_content)
+                    else:
+                        splits = [text_content]
+                        
+                    for i, split in enumerate(splits):
+                        docs.append(Document(
+                            page_content=split,
+                            metadata={
+                                "id": f"{node_id}_{i}",
+                                "file_name": filename,
+                                "html_tag": tag.name,
+                                "parent_ref": parent_id,
+                                "page_number": 1 # Limitation of HTML extraction: hard to get exact page without splitting pages first
+                            }
+                        ))
+
+                    for child in tag.children:
+                        if isinstance(child, Tag):
+                            traverse(child, node_id)
+
+            root = soup.body if soup.body else soup
+            traverse(root)
+            return docs
+
+        except Exception as e:
+            print(f"PDF HTML Extraction Error: {e}")
+            self.console.print(f"[red]Error parsing PDF HTML: {e}[/red]")
             return []
+
+    def _process_table_element(self, table_tag: Tag, filename: str, parent_id: Optional[str]) -> List[Document]:
+        docs = []
+        table_id = str(uuid.uuid4())
+        
+        try:
+            headers = []
+            thead = table_tag.find('thead')
+            if thead:
+                header_row = thead.find('tr')
+                if header_row:
+                    headers = [th.get_text(strip=True) for th in header_row.find_all(['th', 'td'])]
+            
+            if not headers:
+                first_row = table_tag.find('tr')
+                if first_row:
+                    ths = first_row.find_all('th')
+                    if ths:
+                        headers = [th.get_text(strip=True) for th in ths]
+                    else:
+                        first_cells = first_row.find_all(['td', 'th'])
+                        headers = [f"col_{i+1}" for i in range(len(first_cells))]
+            
+            tbody = table_tag.find('tbody')
+            rows = tbody.find_all('tr') if tbody else table_tag.find_all('tr')
+            
+            skip_first = False
+            if rows and not thead:
+                first_row_ths = rows[0].find_all('th')
+                if first_row_ths:
+                    skip_first = True
+            
+            row_start_idx = 1 if skip_first else 0
+            
+            for row_idx, tr in enumerate(rows[row_start_idx:], start=1):
+                cells = tr.find_all(['td', 'th'])
+                cell_contents = [cell.get_text(strip=True) for cell in cells]
+                
+                if not any(cell_contents):
+                    continue
+                
+                columns_dict = {}
+                for i, content in enumerate(cell_contents):
+                    col_name = headers[i] if i < len(headers) else f"col_{i+1}"
+                    columns_dict[col_name] = content
+                
+                # Concise content for embedding
+                row_content = " | ".join([f"{k}: {v}" for k, v in columns_dict.items() if v])
+                
+                doc = Document(
+                    page_content=row_content,
+                    metadata={
+                        "id": f"{table_id}_row_{row_idx}",
+                        "file_name": filename,
+                        "html_tag": "tr",
+                        "parent_ref": parent_id,
+                        "is_table_row": True,
+                        "table_id": table_id,
+                        "row_number": row_idx,
+                        "columns": columns_dict,
+                        "column_headers": headers
+                    }
+                )
+                docs.append(doc)
+            
+        except Exception as e:
+            print(f"Error processing table element: {e}")
+        
+        return docs

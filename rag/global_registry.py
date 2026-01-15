@@ -31,9 +31,9 @@ class GlobalRAGRegistry:
         """
         with cls._lock:
             if cls._instance is not None:
-                logger.warning("RAG Registry already initialized. Replacing instance.")
+                print("RAG Registry already initialized. Replacing instance.")
             cls._instance = rag_core
-            logger.info("🌍 Global RAG Registry initialized")
+            print("🌍 Global RAG Registry initialized")
     
     @classmethod
     def get_instance(cls):
@@ -59,7 +59,7 @@ class GlobalRAGRegistry:
         with cls._lock:
             if callback not in cls._relay_listeners:
                 cls._relay_listeners.append(callback)
-                logger.info(f"📡 Registered RELAY listener: {callback.__name__}")
+                print(f"📡 Registered RELAY listener: {callback.__name__}")
     
     @classmethod
     async def notify_relay_discovered(cls, relay_info: Dict[str, Any]):
@@ -73,14 +73,14 @@ class GlobalRAGRegistry:
             cls._discovered_relays.append(relay_info)
             listeners = cls._relay_listeners.copy()
         
-        logger.info(f"🔌 Broadcasting RELAY discovery: {relay_info.get('key')}")
+        print(f"🔌 Broadcasting RELAY discovery: {relay_info.get('key')}")
         
         # Notify all listeners asynchronously
         for listener in listeners:
             try:
                 await listener(relay_info)
             except Exception as e:
-                logger.error(f"Error notifying listener {listener.__name__}: {e}")
+                print(f"Error notifying listener {listener.__name__}: {e}")
     
     @classmethod
     def get_discovered_relays(cls) -> List[Dict[str, Any]]:
@@ -93,4 +93,4 @@ class GlobalRAGRegistry:
         """Clear all RELAY listeners"""
         with cls._lock:
             cls._relay_listeners.clear()
-            logger.info("Cleared all RELAY listeners")
+            print("Cleared all RELAY listeners")

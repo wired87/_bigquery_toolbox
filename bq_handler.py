@@ -1,7 +1,11 @@
-import time
+import os
 import json
 from typing import List
+import dotenv
 
+from auth.load_sa_creds import load_service_account_credentials
+
+dotenv.load_dotenv()
 import networkx as nx
 import pandas as pd
 import io
@@ -22,7 +26,9 @@ class BQGroundZero:
     """
 
     def __init__(self, dataset_id=None):
-        self.bqclient = bigquery.Client()
+        self.bqclient = bigquery.Client(
+            credentials=load_service_account_credentials(os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
+        )
         self.pid = self.bqclient.project
         self.ds_id = dataset_id or BQ_DATASET_ID
         self.base_path = f"{self.pid}.{self.ds_id}"

@@ -15,7 +15,7 @@ class ImageProcessor(BaseProcessor):
             self.console.print(f"[red]❌ Error loading Image {file_path}: {e}[/red]")
             return []
 
-    def load_from_bytes(self, filename: str, content: bytes) -> List[Document]:
+    def process_bytes(self, filename: str, content: bytes, category=None) -> List[Document]:
         # Unstructured often needs a file on disk or specific handling. 
         # For simple byte processing without a file, it's complex.
         # We'll skip byte processing for images for now or treat as placeholder.

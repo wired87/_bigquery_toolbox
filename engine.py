@@ -5,6 +5,8 @@ import logging
 from typing import List, Dict, Any, Optional, Set
 from rich.console import Console
 
+from client_package.processor.main import FileProcessorFacade
+
 # Configure Structured Logging
 logging.basicConfig(
     level=logging.INFO,
@@ -17,46 +19,38 @@ logger = logging.getLogger(__name__)
 import vertexai
 from vertexai.generative_models import GenerativeModel, Tool, FunctionDeclaration, Part, Content, ChatSession
 from vertexai.language_models import TextEmbeddingModel
-from google.cloud import bigquery
 
 
 # Local imports
-from bq_handler import BigQueryRAG
-from file_processor import FileProcessor
+from bq_handler import BigQueryRAG, BQCore
+#from file_processor import FileProcessor
 from auth_manager import AuthManager
 from chat_history import ChatHistoryDB
 from error_handler import log_exception, create_error_response, DetailedExceptionLogger
-import glob
-import prompts
 
+import prompts
+import dotenv
+dotenv.load_dotenv()
 # Constants
 DEFAULT_DATASET_ID = "IDB"
 DEFAULT_MODEL_NAME = "gemini-2.5-pro"
 DATA_DIR = "./data_dir"
 
-class CoreEngine:
+class CoreEngine(BQCore):
     def __init__(self, credentials_path: str = "credentials.json", require_auth: bool = False):
-        self.console = Console()
         self.setup_credentials(credentials_path)
-        
+        BQCore.__init__(self, dataset_id=None)
+        self.console = Console()
+
         # Authentication state
         self.is_authenticated = not require_auth
         self.current_user_email = None
         self.current_dataset_id = DEFAULT_DATASET_ID
-        self.auth_manager = None
-        
-        # Initialize BigQuery client for auth
-        try:
-            self.bq_client = bigquery.Client()
-            self.project_id = self.bq_client.project
-            # Initialize AuthManager
-            self.auth_manager = AuthManager(self.bq_client, self.project_id)
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize BigQuery client: {e}")
-            self.bq_client = None
-            self.project_id = os.getenv("GCP_PROJECT", "mock-project")
-            self.auth_manager = None
-        
+        self.auth_manager = AuthManager(
+            bq_client=self.bqclient,
+            project_id=self.bqclient.project,
+        )
+
         if not require_auth and self.auth_manager:
             # Initialize normally with default dataset
             self._initialize_engine(DEFAULT_DATASET_ID)
@@ -78,18 +72,18 @@ class CoreEngine:
             self.bq_core = BigQueryRAG(dataset=dataset_id)
             self.bq_rag = self.bq_core 
         except Exception as e:
-            logger.warning(f"⚠️  Could not initialize BigQueryRAG: {e}. Data features will be limited.")
+            print(f"⚠️  Could not initialize BigQueryRAG: {e}. Data features will be limited.")
             self.bq_core = None
             self.bq_rag = None
         
         # Initialize File Processor
-        self.file_processor = FileProcessor()
+        self.file_processor = FileProcessorFacade()
         
         # Initialize Vertex AI
         try:
-            vertexai.init(project=self.project_id, location="us-central1")
+            vertexai.init(project=self.pid, location="us-central1")
         except Exception as e:
-            logger.warning(f"Vertex AI Init warning (safe to ignore if already init): {e}")
+            print(f"Vertex AI Init warning (safe to ignore if already init): {e}")
         
         # Initialize Models
         system_instruction = [
@@ -126,7 +120,7 @@ class CoreEngine:
         if self.current_user_email:
             msg_count = self.db.get_session_count(self.current_user_email)
             self.db.clear_session(self.current_user_email)
-            logger.info(f"Chat history cleared for {self.current_user_email} ({msg_count} messages)")
+            print(f"Chat history cleared for {self.current_user_email} ({msg_count} messages)")
     
     async def authenticate(self, email: str, password: str) -> Dict[str, Any]:
         """
@@ -139,21 +133,6 @@ class CoreEngine:
         Returns:
             Dict with authentication result
         """
-        if not self.auth_manager:
-            # Allow development bypass for specific test credentials if credentials.json is missing
-            if email == "admin@example.com" and password == "admin123":
-                self.is_authenticated = True
-                self.current_user_email = email
-                self.current_dataset_id = "MOCK_DATASET"
-                self.current_table_id = "KB"
-                logger.warning(f"⚠️  DEVELOPMENT BYPASS: Authenticated {email} with MOCK DATA.")
-                return {
-                    "success": True, 
-                    "dataset_id": "MOCK_DATASET", 
-                    "message": "✅ Authenticated (MOCK MODE)"
-                }
-            return {"success": False, "message": "❌ Server Error: Authentication system not available (Credentials missing)."}
-            
         result = await asyncio.to_thread(self.auth_manager.authenticate_user, email, password)
         
         if result["success"]:
@@ -164,7 +143,7 @@ class CoreEngine:
             
             # Initialize/reinitialize engine with user's dataset
             await asyncio.to_thread(self._initialize_engine, self.current_dataset_id)
-            logger.info(f"✅ Authenticated {email}. Using Dataset: {self.current_dataset_id} | Table: {self.current_table_id}")
+            print(f"✅ Authenticated {email}. Using Dataset: {self.current_dataset_id} | Table: {self.current_table_id}")
             
         return result
 
@@ -172,22 +151,22 @@ class CoreEngine:
         """
         Retrieves a set of all unique file_ids already present in the user's KB table.
         """
-        if not self.bq_client or not self.current_dataset_id:
+        if not self.bqclient or not self.current_dataset_id:
             return set()
             
         table_id = getattr(self, 'current_table_id', 'KB')
-        query = f"SELECT DISTINCT file_id FROM `{self.project_id}.{self.current_dataset_id}.{table_id}`"
+        query = f"SELECT DISTINCT file_id FROM `{self.pid}.{self.current_dataset_id}.{table_id}`"
         
         try:
-            logger.info(f"🔍 Checking existing files in {self.current_dataset_id}.{table_id}...")
+            print(f"🔍 Checking existing files in {self.current_dataset_id}.{table_id}...")
             # Run query in a separate thread
             def run():
-                query_job = self.bq_client.query(query)
+                query_job = self.bqclient.query(query)
                 return {row.file_id for row in query_job.result()}
                 
             return await asyncio.to_thread(run)
         except Exception as e:
-            logger.warning(f"Could not retrieve existing filenames: {e}")
+            print(f"Could not retrieve existing filenames: {e}")
             return set()
 
 
@@ -195,15 +174,15 @@ class CoreEngine:
         abs_path = os.path.abspath(path)
         if os.path.exists(abs_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = abs_path
-            logger.info(f"Loaded credentials from {abs_path}")
+            print(f"Loaded credentials from {abs_path}")
         else:
-            logger.error(f"Warning: Credentials file not found at {abs_path}")
+            print(f"Warning: Credentials file not found at {abs_path}")
 
     # --- Tool Wrappers ---
     def list_datasets(self) -> List[str]:
         """Wrapper for listing datasets."""
         try:
-            datasets = list(self.bq_client.list_datasets())
+            datasets = list(self.bqclient.list_datasets())
             return [d.dataset_id for d in datasets]
         except Exception as e:
             return [f"Error listing datasets: {e}"]
@@ -215,7 +194,7 @@ class CoreEngine:
         # For safety, we use the internal client if dataset_id matches current, or try to list from the specific dataset.
         target_ds = dataset_id if dataset_id else self.current_dataset_id
         try:
-            tables = list(self.bq_client.list_tables(f"{self.project_id}.{target_ds}"))
+            tables = list(self.bqclient.list_tables(f"{self.pid}.{target_ds}"))
             return [t.table_id for t in tables]
         except Exception as e:
              return [f"Error listing tables in {target_ds}: {e}"]
@@ -244,7 +223,7 @@ class CoreEngine:
         # Default to 'KB' if no table_id provided or if it's generic
         target_table = table_id if table_id else getattr(self, 'current_table_id', 'KB')
         if not table_id:
-             logger.info(f"Using default table '{target_table}' for vector search")
+             print(f"Using default table '{target_table}' for vector search")
              
         if not self.bq_core:
              return [{"content": "MOCK DATA: Please verify credentials. Vertex AI can't reach BQ.", "file_id": "mock.pdf"}]
@@ -263,13 +242,13 @@ class CoreEngine:
                 embed_column="embedding" # FIXED: Always use the content embedding column
             )
         except Exception as e:
-             logger.error(f"Vector search failed: {e}")
+             print(f"Vector search failed: {e}")
              return [{"error": str(e), "content": "Unable to search KB."}]
 
     def get_table_metadata(self, table_id: str) -> Dict[str, Any]:
         """Wrapper for get_table_metadata tool."""
         try:
-            table = self.bq_client.get_table(f"{self.project_id}.{self.current_dataset_id}.{table_id}")
+            table = self.bqclient.get_table(f"{self.pid}.{self.current_dataset_id}.{table_id}")
             return {
                 "num_rows": table.num_rows,
                 "created": str(table.created),
@@ -377,7 +356,7 @@ class CoreEngine:
                 timeout=30.0
             )
             intent = response.text.strip()
-            logger.info(f"Classification result: {intent}")
+            print(f"Classification result: {intent}")
 
             if "similarity" in intent.lower(): return "query_similarity_search"
             if "sql" in intent.lower(): return "query_sql_generation"
@@ -386,10 +365,10 @@ class CoreEngine:
                 return "upload_by_path"
             return "query_non_db_chat"
         except asyncio.TimeoutError:
-            logger.warning(f"Classification timed out for: {user_input[:50]}")
+            print(f"Classification timed out for: {user_input[:50]}")
             return "query_non_db_chat"  # Safe fallback
         except Exception as e:
-            logger.warning(f"Classification error: {e}")
+            print(f"Classification error: {e}")
             return "query_non_db_chat"
 
     async def rewrite_user_input(self, user_input: str) -> str:
@@ -410,10 +389,10 @@ class CoreEngine:
             response = await self.model.generate_content_async(prompt)
             rewritten = response.text.strip()
             if rewritten != user_input:
-                logger.info(f"🔄 Rewrote query: '{user_input}' -> '{rewritten}'")
+                print(f"🔄 Rewrote query: '{user_input}' -> '{rewritten}'")
             return rewritten
         except Exception as e:
-            logger.warning(f"Rewrite failed: {e}")
+            print(f"Rewrite failed: {e}")
             return user_input
 
     async def upsert_data(self, table_id: str, rows: List[Dict[str, Any]], upsert: bool = True) -> Dict[str, Any]:
@@ -453,7 +432,7 @@ class CoreEngine:
                     tool_name = call.name
                     tool_args = {k: v for k, v in call.args.items()}
                     
-                    logger.info(f"⚙️ Calling tool: {tool_name} with args: {tool_args}")
+                    print(f"⚙️ Calling tool: {tool_name} with args: {tool_args}")
                     
                     # Dynamically call the tool function from SELF (using wrappers)
                     tool_func = getattr(self, tool_name, None)
@@ -470,14 +449,14 @@ class CoreEngine:
                             ))
                         except Exception as e:
                             error_message = f"Error calling tool {tool_name}: {e}"
-                            logger.error(f"❌ {error_message}")
+                            print(f"❌ {error_message}")
                             response_parts.append(Part.from_function_response(
                                 name=tool_name,
                                 response={"error": error_message}
                             ))
                     else:
                         error_message = f"Tool {tool_name} not found."
-                        logger.error(f"❌ {error_message}")
+                        print(f"❌ {error_message}")
                         response_parts.append(Part.from_function_response(
                             name=tool_name,
                             response={"error": error_message}

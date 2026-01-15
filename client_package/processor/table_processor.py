@@ -13,15 +13,15 @@ class TableProcessor(BaseProcessor):
             self.console.print(f"[red]❌ Error loading CSV {file_path}: {e}[/red]")
             return []
 
-    def load_from_bytes(self, filename: str, content: bytes) -> List[Document]:
+    def process_bytes(self, filename: str, content: bytes, category:str) -> List[Document]:
         try:
             import pandas as pd
             df = pd.read_csv(io.BytesIO(content))
             text_content = df.to_string() # Simple representation
-            return [Document(page_content=text_content, metadata={"source": filename})]
+            return [Document(page_content=text_content, metadata={"source": filename, "category": category})]
         except ImportError:
             # Fallback to plain text if pandas not available
-            return [Document(page_content=content.decode('utf-8', errors='ignore'), metadata={"source": filename})]
+            return [Document(page_content=content.decode('utf-8', errors='ignore'), metadata={"source": filename, "category": category})]
         except Exception as e:
             self.console.print(f"[red]❌ Error loading CSV bytes for {filename}: {e}[/red]")
             return []

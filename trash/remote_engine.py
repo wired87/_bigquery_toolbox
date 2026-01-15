@@ -55,21 +55,21 @@ class RemoteEngine:
             try:
                 self.processor = FileProcessor()
             except Exception as e:
-                logger.warning(f"Could not init local FileProcessor: {e}")
+                print(f"Could not init local FileProcessor: {e}")
     
     def clear_history(self):
         """
         Clear session history (remote sessions handled server-side).
         This is a no-op for RemoteEngine as history is managed on the server.
         """
-        logger.info("History clearing (remote session - managed server-side)")
+        print("History clearing (remote session - managed server-side)")
     
     async def _keepalive_loop(self):
         """
         Background task that sends periodic pings to keep the WebSocket connection alive.
         Uses the built-in websockets ping/pong mechanism.
         """
-        logger.info("🔄 Keepalive task started")
+        print("🔄 Keepalive task started")
         self._keepalive_running = True
         
         while self._keepalive_running:
@@ -91,15 +91,15 @@ class RemoteEngine:
                     logger.debug("⚠️ WebSocket not connected, skipping keepalive ping")
                     
             except asyncio.TimeoutError:
-                logger.warning("⏰ Keepalive ping timeout - connection may be stale")
+                print("⏰ Keepalive ping timeout - connection may be stale")
             except asyncio.CancelledError:
-                logger.info("🛑 Keepalive task cancelled")
+                print("🛑 Keepalive task cancelled")
                 break
             except Exception as e:
-                logger.warning(f"⚠️ Keepalive ping failed: {e}")
+                print(f"⚠️ Keepalive ping failed: {e}")
                 # Don't break - let the connection be detected as dead on next actual use
                 
-        logger.info("🔄 Keepalive task stopped")
+        print("🔄 Keepalive task stopped")
         
     def _stop_keepalive(self):
         """Stop the keepalive background task."""
@@ -152,7 +152,7 @@ class RemoteEngine:
                         ),
                         timeout=60.0
                     )
-                    logger.info(f"✅ Connected to WebSocket at {self.ws_url}")
+                    print(f"✅ Connected to WebSocket at {self.ws_url}")
                     
                     # Update server_url approximation
                     if "://" in self.ws_url:
@@ -203,7 +203,7 @@ class RemoteEngine:
                     # Connection successful!
                     self.ws_url = ws_url
                     self.server_url = f"http://127.0.0.1:{port}"
-                    logger.info(f"✅ Connected to WebSocket at {ws_url}")
+                    print(f"✅ Connected to WebSocket at {ws_url}")
                     connected = True
                     
                     # Start keepalive task to maintain connection
@@ -213,11 +213,11 @@ class RemoteEngine:
                     
                     # Auto-re-authenticate if we have credentials
                     if self.email and self.password:
-                        logger.info("🔄 Re-authenticating session...")
+                        print("🔄 Re-authenticating session...")
                         try:
                             await self.authenticate(self.email, self.password)
                         except Exception as e:
-                            logger.error(f"Re-authentication failed: {e}")
+                            print(f"Re-authentication failed: {e}")
                     
                     break  # Exit loop on success
                     
@@ -283,7 +283,7 @@ class RemoteEngine:
         # Intercept local path commands (upsert, ingest, upload)
         if any(kw in user_input.lower() for kw in ["upload", "ingest", "upsert"]) and \
            any(p in user_input.lower() for p in ["/", "\\", "c:", "./", "../", "dir", "path"]):
-            logger.info(f"Intercepted local ingestion command: {user_input}")
+            print(f"Intercepted local ingestion command: {user_input}")
             return await self.ingest_from_path(user_input, status_callback, confirm_callback=confirm_callback)
         
         msg = {
@@ -320,10 +320,10 @@ class RemoteEngine:
                     final_result = {"response_text": f"Error: {data.get('message')}", "intent": "error"}
                     break
             except asyncio.TimeoutError:
-                logger.warning("Timeout waiting for server response (90s)")
+                print("Timeout waiting for server response (90s)")
                 return {"response_text": "Server response timeout. The operation may still be processing.", "intent": "error"}
             except websockets.exceptions.ConnectionClosed as e:
-                logger.error(f"WebSocket connection closed: {e}")
+                print(f"WebSocket connection closed: {e}")
                 return {"response_text": "Server connection closed.", "intent": "error"}
                 
         return final_result
@@ -348,7 +348,7 @@ class RemoteEngine:
             if data.get("type") == "duplicate_check_result":
                 return data.get("duplicates", [])
         except Exception as e:
-            logger.warning(f"Duplicate check failed: {e}")
+            print(f"Duplicate check failed: {e}")
             
         return []
 
@@ -394,7 +394,7 @@ class RemoteEngine:
                     elif resp_type == "error":
                         return f"Error: {data.get('message')}"
             except (websockets.exceptions.ConnectionClosed, ConnectionError) as e:
-                logger.warning(f"⚠️ Connection lost during upload of {filename}. Attempt {attempts}/{max_attempts}. Error: {e}")
+                print(f"⚠️ Connection lost during upload of {filename}. Attempt {attempts}/{max_attempts}. Error: {e}")
                 self.ws = None # Force reconnect
                 if attempts >= max_attempts:
                     return f"Upload failed after {max_attempts} attempts: {e}"
@@ -555,7 +555,7 @@ class RemoteEngine:
         """
         Gracefully close the WebSocket connection and cleanup resources.
         """
-        logger.info("🔌 Closing WebSocket connection...")
+        print("🔌 Closing WebSocket connection...")
         
         # Stop keepalive task first
         self._stop_keepalive()
@@ -564,9 +564,9 @@ class RemoteEngine:
         if self.ws and not self.ws.closed:
             try:
                 await self.ws.close()
-                logger.info("✅ WebSocket connection closed")
+                print("✅ WebSocket connection closed")
             except Exception as e:
-                logger.warning(f"⚠️ Error closing WebSocket: {e}")
+                print(f"⚠️ Error closing WebSocket: {e}")
         
         self.ws = None
         self.is_authenticated = False
