@@ -215,7 +215,8 @@ class CoreEngine(BQCore):
         if not self.bq_core:
              return {"error": "BigQuery RAG handler not initialized (check credentials)."}
         try:
-             return self.bq_core.bq_get_table_schema(table_name=table_id)
+             # Use the detailed schema method
+             return self.bq_core.bq_get_detailed_table_schema(table_name=table_id)
         except Exception as e:
              return {"error": str(e)}
 
@@ -416,6 +417,50 @@ class CoreEngine(BQCore):
         except Exception as e:
             print(f"Rewrite failed: {e}")
             return user_input
+
+    async def process_user_input(
+        self,
+        user_input: str,
+        status_callback: Optional[callable] = None
+    ) -> Dict[str, Any]:
+        """
+        Main entry point for processing user input.
+        Orchestrates classification, routing, and execution.
+        """
+        if not self.is_authenticated:
+            return {
+                "intent": "error",
+                "response_text": "Please log in to continue."
+            }
+            
+        # 1. Classification
+        intent = await self.classify_intent(user_input)
+        
+        # 2. Rewrite Query (if needed, mostly for search/SQL)
+        if intent in ["query_sql_generation", "query_similarity_search"]:
+            user_input = await self.rewrite_user_input(user_input)
+            
+        print(f"➡️  Route: {intent} | Query: {user_input}")
+        
+        # 3. Route to Handler
+        handler_map = {
+            "query_similarity_search": self.vector_handler,
+            "query_sql_generation": self.sql_handler,
+            "upload_by_path": self.ingest_handler,
+            "query_non_db_chat": self.general_handler
+        }
+        
+        handler = handler_map.get(intent, self.general_handler)
+        
+        try:
+            return await handler.handle(user_input, status_callback)
+        except Exception as e:
+            print(f"❌ Processing Error: {e}")
+            return {
+                "intent": "error",
+                "response_text": f"An error occurred: {str(e)}",
+                "error": str(e)
+            }
 
     async def upsert_data(self, table_id: str, rows: List[Dict[str, Any]], upsert: bool = True) -> Dict[str, Any]:
         """

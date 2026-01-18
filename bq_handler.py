@@ -429,7 +429,30 @@ class BQCore(BQGroundZero):
                     ttype="edge" if any(c.islower() for c in table_name) else "node"
                 )
                 # Re-try getting schema after creation
+                # Re-try getting schema after creation
                 return self.bq_get_table_schema(table_name)
+
+
+    def bq_get_detailed_table_schema(self, table_name):
+        """
+        Returns a detailed schema list: [{"name":..., "type":..., "mode":..., "description":...}]
+        """
+        if table_name:
+            try:
+                table = self.bqclient.get_table(self.get_table_name(table_name))
+                schema = []
+                for field in table.schema:
+                    schema.append({
+                        "name": field.name,
+                        "type": field.field_type,
+                        "mode": field.mode,
+                        "description": field.description
+                    })
+                print(f"Detailed schema received for {table_name}")
+                return schema
+            except Exception as e:
+                print(f"Error getting detailed schema for {table_name}: {e}")
+                return []
 
 
     def update_bq_schema(self, table, rows):

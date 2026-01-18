@@ -43,61 +43,63 @@ st.markdown("""
 
     /* Global Reset & Background */
     .stApp {
-        background-color: #000000 !important;
-        color: #FFFFFF !important;
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
         font-family: 'Inter', sans-serif !important;
     }
     
     /* Typography */
     h1, h2, h3, h4, h5, h6, p, li, span, div {
-        color: #FFFFFF !important;
+        color: #000000 !important;
         font-family: 'Inter', sans-serif !important;
     }
     
     /* Sidebar */
     section[data-testid="stSidebar"] {
-        background-color: #050505 !important;
-        border-right: 1px solid #1a1a1a;
+        background-color: #F0F0F0 !important;
+        border-right: 2px solid #000000 !important;
     }
     section[data-testid="stSidebar"] * {
-        color: #a0a0a0 !important;
+        color: #000000 !important;
     }
 
     /* Inputs */
     .stTextInput input, .stTextArea textarea, .stChatInput textarea {
-        background-color: #0a0a0a !important;
-        color: #FFFFFF !important;
-        border: 1px solid #333 !important;
-        border-radius: 8px !important;
-        caret-color: #FFFFFF;
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border: 2px solid #000000 !important;
+        border-radius: 4px !important;
+        caret-color: #000000;
+        font-weight: 500;
     }
     .stTextInput input:focus, .stTextArea textarea:focus, .stChatInput textarea:focus {
-        border-color: #FFFFFF !important;
-        box-shadow: none !important;
+        border-color: #0000CC !important;
+        box-shadow: 0 0 0 2px rgba(0,0,204,0.2) !important;
     }
     
     /* Buttons */
     .stButton button {
-        background-color: #FFFFFF !important;
-        color: #000000 !important;
-        border: none !important;
-        font-weight: 600 !important;
-        border-radius: 6px !important;
+        background-color: #000000 !important;
+        color: #FFFFFF !important;
+        border: 2px solid #000000 !important;
+        font-weight: 700 !important;
+        border-radius: 4px !important;
         transition: all 0.2s ease;
     }
     .stButton button:hover {
-        background-color: #e0e0e0 !important;
+        background-color: #333333 !important;
         transform: scale(1.02);
     }
     
-    /* Chat Message Specifics - Classes injected in chat.py */
+    /* Chat Message Specifics */
     .user-message {
-        background-color: #FFFFFF;
+        background-color: #F0F0F0;
         color: #000000 !important;
         padding: 1rem;
-        border-radius: 12px;
+        border: 2px solid #000000;
+        border-radius: 8px;
         margin-bottom: 0.5rem;
-        box-shadow: 0 2px 4px rgba(255,255,255,0.1);
+        font-weight: 500;
     }
     
     .user-message * {
@@ -105,12 +107,20 @@ st.markdown("""
     }
 
     .assistant-message {
-        background-color: #0a0a0a;
-        color: #FFFFFF !important;
+        background-color: #FFFFFF;
+        color: #000000 !important;
         padding: 1rem;
-        border: 1px solid #333;
-        border-radius: 12px;
+        border: 2px solid #000000;
+        border-radius: 8px;
         margin-bottom: 0.5rem;
+        font-weight: 500;
+    }
+    
+    /* Code Blocks */
+    code, pre {
+        background-color: #f4f4f4 !important;
+        color: #000000 !important;
+        border: 1px solid #ccc;
     }
 </style>
 """, unsafe_allow_html=True)

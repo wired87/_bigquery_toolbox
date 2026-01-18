@@ -55,25 +55,39 @@ class SQLHandler:
         formatted_table_names = [f"{self.engine.pid}.{self.engine.current_dataset_id}.KB"]
         await update_status(f"✅ Selected knowledge base: {formatted_table_names[0]}", "tables_selected")
         
-        # 3. Get Schemas
-        await update_status("📖 Loading schemas...", "load_schema")
+        # 3. Get Schemas & Metadata
+        await update_status("📖 Loading schemas and metadata...", "load_schema")
         schemas = {}
+        metadata = {}
         for t in relevant_tables:
             try:
                 if self.engine.bq_core:
                     # RAG Engine uses BQCore/BigQueryRAG
-                    schemas[t] = await asyncio.to_thread(self.engine.bq_core.bq_get_table_schema, t)
+                    schemas[t] = await asyncio.to_thread(self.engine.bq_core.bq_get_detailed_table_schema, t)
+                    
+                    # Fetch extra metadata (rows, size, etc.)
+                    meta = await asyncio.to_thread(self.engine.get_table_metadata, t)
+                    metadata[t] = meta
                 else:
                      schemas[t] = "Schema unavailable"
+                     metadata[t] = "Metadata unavailable"
             except Exception:
                 schemas[t] = "Schema unavailable"
+                metadata[t] = "Metadata unavailable"
             
         # 4. Generate SQL
         await update_status("🤖 Generating SQL query...", "generate_sql")
+        
+        # Combine schema and metadata for the prompt
+        context_data = {
+            "schemas": schemas,
+            "table_metadata": metadata
+        }
+        
         prompt = prompts.get_sql_generation_prompt(
             user_input, 
             json.dumps(formatted_table_names, indent=2),
-            json.dumps(schemas, indent=2)
+            json.dumps(context_data, indent=2) # Pass full context
         )
         
         if not self.engine.model:
@@ -83,7 +97,7 @@ class SQLHandler:
             }
 
         response = await asyncio.wait_for(
-            self.engine.model.generate_content_async(prompt),
+            asyncio.to_thread(self.engine.model.generate_content, prompt),
             timeout=60.0
         )
         sql_query = response.text.replace("```sql", "").replace("```", "").strip()
@@ -107,7 +121,7 @@ class SQLHandler:
                 json.dumps(query_result, default=str)
             )
             answer_response = await asyncio.wait_for(
-                self.engine.model.generate_content_async(answer_prompt),
+                asyncio.to_thread(self.engine.model.generate_content, answer_prompt),
                 timeout=60.0
             )
             

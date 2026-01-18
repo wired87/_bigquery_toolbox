@@ -49,7 +49,7 @@ def get_table_filter_prompt(user_input: str, all_tables: str) -> str:
     Return a JSON list of strings, e.g. ["table1", "table2"].
     """
 
-def get_sql_generation_prompt(user_input: str, formatted_table_names: str, schemas: str) -> str:
+def get_sql_generation_prompt(user_input: str, formatted_table_names: str, context_data: str) -> str:
     return f"""
     You are a BigQuery SQL expert.
     
@@ -58,12 +58,19 @@ def get_sql_generation_prompt(user_input: str, formatted_table_names: str, schem
     Relevant Tables (Fully Qualified):
     {formatted_table_names}
     
-    Schemas:
-    {schemas}
+    Context (Schemas & Metadata):
+    {context_data}
     
     Generate a valid BigQuery SQL query to answer the question.
     Use the fully qualified table names provided.
-    Return ONLY the SQL query, nothing else.
+    
+    CRITICAL RULES:
+    1. Use Standard SQL syntax for BigQuery.
+    2. Use `LIMIT n` instead of `TOP n`.
+    3. Return ONLY the raw SQL string. Do NOT use markdown code blocks (```sql ... ```).
+    4. Ensure column names exist in the provided schema.
+    5. Pay attention to 'mode': 'REPEATED' in the schema. These are ARRAYs and require UNNEST() to query effectively if filtering by value.
+    6. Use the provided table metadata (row counts, etc.) to optimize your query (e.g. don't SELECT * on massive tables).
     """
 
 def get_natural_answer_prompt(user_input: str, sql_query: str, query_result: str) -> str:
