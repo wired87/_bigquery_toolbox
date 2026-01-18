@@ -86,17 +86,27 @@ class CoreEngine(BQCore):
             print(f"Vertex AI Init warning (safe to ignore if already init): {e}")
         
         # Initialize Models
-        system_instruction = [
-            "You are a helpful AI assistant with access to a BigQuery Knowledge Base.",
-            "When answering questions based on tool outputs (especially vector search), you MUST cite the source file and, if available, the specific section or HTML tag where the information was found.",
-            "Use the 'content' field from search results to answer.",
-            "If the search result includes 'html_tag', mention it to provide context (e.g. 'Found in a <div> tag' or 'Section <H1>')."
-        ]
-        self.model = GenerativeModel(DEFAULT_MODEL_NAME, system_instruction=system_instruction)
-        self.embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
-        
-        # Chat Session
-        self.chat_session = self.model.start_chat()
+        self.model = None
+        self.embedding_model = None
+        self.chat_session = None
+
+        try:
+            system_instruction = [
+                "You are a helpful AI assistant with access to a BigQuery Knowledge Base.",
+                "When answering questions based on tool outputs (especially vector search), you MUST cite the source file and, if available, the specific section or HTML tag where the information was found.",
+                "Use the 'content' field from search results to answer.",
+                "If the search result includes 'html_tag', mention it to provide context (e.g. 'Found in a <div> tag' or 'Section <H1>')."
+            ]
+            self.model = GenerativeModel(DEFAULT_MODEL_NAME, system_instruction=system_instruction)
+            self.embedding_model = TextEmbeddingModel.from_pretrained("text-embedding-004")
+            
+            # Chat Session
+            self.chat_session = self.model.start_chat()
+            print("✅ Vertex AI Models initialized successfully.")
+        except Exception as e:
+            print(f"⚠️  Vertex AI Model Init Failed: {e}")
+            print(f"    Running in degraded mode. AI features will be unavailable.")
+
         
         # Tools
         self.tools = self.get_bq_tools()
@@ -229,6 +239,10 @@ class CoreEngine(BQCore):
              return [{"content": "MOCK DATA: Please verify credentials. Vertex AI can't reach BQ.", "file_id": "mock.pdf"}]
         try:
             # Embed query locally to avoid BQML connection issues
+            if not self.embedding_model:
+                 print("⚠️ Embedding model not available (degraded mode). Returning empty results.")
+                 return []
+            
             embeddings = self.embedding_model.get_embeddings([query_text])
             query_vector = embeddings[0].values
             
@@ -348,12 +362,17 @@ class CoreEngine(BQCore):
            any(p in user_input.lower() for p in ["/", "\\", "c:", "./", "../", "dir", "path"]):
             return "upload_by_path"
             
+        if not self.model:
+            print("⚠️ AI Model not available. Classification skipped.")
+            return "query_non_db_chat" # Fallback to general chat or error
+            
         prompt_classification = prompts.get_classification_prompt(user_input)
         try:
             # Add timeout protection (30 seconds for classification)
-            response = await asyncio.wait_for(
-                self.model.generate_content_async(prompt_classification),
-                timeout=30.0
+            # Use sync generate_content in thread to avoid async loop issues
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                prompt_classification
             )
             intent = response.text.strip()
             print(f"Classification result: {intent}")
@@ -384,9 +403,12 @@ class CoreEngine(BQCore):
         if not history_text:
             return user_input
             
+        if not self.model:
+            return user_input
+            
         prompt = prompts.get_query_rewrite_prompt(user_input, history_text)
         try:
-            response = await self.model.generate_content_async(prompt)
+            response = await asyncio.to_thread(self.model.generate_content, prompt)
             rewritten = response.text.strip()
             if rewritten != user_input:
                 print(f"🔄 Rewrote query: '{user_input}' -> '{rewritten}'")
@@ -462,8 +484,9 @@ class CoreEngine(BQCore):
                             response={"error": error_message}
                         ))
                 
-                # Send tool outputs back to the model
-                tool_response = await self.chat_session.send_message_async(
+                # Send tool outputs back to the model (Sync in thread)
+                tool_response = await asyncio.to_thread(
+                    self.chat_session.send_message,
                     response_parts
                 )
                 return tool_response.text

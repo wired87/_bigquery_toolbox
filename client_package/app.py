@@ -39,11 +39,79 @@ st.set_page_config(
 # --- Custom CSS ---
 st.markdown("""
 <style>
-    .stApp { background-color: #0e1117; color: #e0e0e0; }
-    h1, h2, h3 { font-family: 'Inter', sans-serif; color: #ffffff; }
-    /* Chat styling */
-    .user-msg { border-left: 4px solid #4CAF50; padding-left: 10px; }
-    .bot-msg { border-left: 4px solid #2196F3; padding-left: 10px; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+    /* Global Reset & Background */
+    .stApp {
+        background-color: #000000 !important;
+        color: #FFFFFF !important;
+        font-family: 'Inter', sans-serif !important;
+    }
+    
+    /* Typography */
+    h1, h2, h3, h4, h5, h6, p, li, span, div {
+        color: #FFFFFF !important;
+        font-family: 'Inter', sans-serif !important;
+    }
+    
+    /* Sidebar */
+    section[data-testid="stSidebar"] {
+        background-color: #050505 !important;
+        border-right: 1px solid #1a1a1a;
+    }
+    section[data-testid="stSidebar"] * {
+        color: #a0a0a0 !important;
+    }
+
+    /* Inputs */
+    .stTextInput input, .stTextArea textarea, .stChatInput textarea {
+        background-color: #0a0a0a !important;
+        color: #FFFFFF !important;
+        border: 1px solid #333 !important;
+        border-radius: 8px !important;
+        caret-color: #FFFFFF;
+    }
+    .stTextInput input:focus, .stTextArea textarea:focus, .stChatInput textarea:focus {
+        border-color: #FFFFFF !important;
+        box-shadow: none !important;
+    }
+    
+    /* Buttons */
+    .stButton button {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+        border: none !important;
+        font-weight: 600 !important;
+        border-radius: 6px !important;
+        transition: all 0.2s ease;
+    }
+    .stButton button:hover {
+        background-color: #e0e0e0 !important;
+        transform: scale(1.02);
+    }
+    
+    /* Chat Message Specifics - Classes injected in chat.py */
+    .user-message {
+        background-color: #FFFFFF;
+        color: #000000 !important;
+        padding: 1rem;
+        border-radius: 12px;
+        margin-bottom: 0.5rem;
+        box-shadow: 0 2px 4px rgba(255,255,255,0.1);
+    }
+    
+    .user-message * {
+        color: #000000 !important;
+    }
+
+    .assistant-message {
+        background-color: #0a0a0a;
+        color: #FFFFFF !important;
+        padding: 1rem;
+        border: 1px solid #333;
+        border-radius: 12px;
+        margin-bottom: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 

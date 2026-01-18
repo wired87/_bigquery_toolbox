@@ -28,13 +28,18 @@ class VectorHandler:
         
         logger.debug(f"Calling Gemini for vector search with tools (timeout: 90s)...")
         
+        if not self.engine.chat_session:
+            return {
+                "intent": "query_similarity_search", 
+                "response_text": "⚠️ AI features unavailable (Auth Error). Cannot perform vector search."
+            }
+
         try:
-            response = await asyncio.wait_for(
-                self.engine.chat_session.send_message_async(
-                    f"User wants to find items: {user_input}. Use vector_search tool if appropriate. Default table is 'KB'.",
-                    tools=[self.engine.tools]
-                ),
-                timeout=90.0
+            # Use sync send_message in thread to avoid async loop issues
+            response = await asyncio.to_thread(
+                self.engine.chat_session.send_message,
+                f"User wants to find items: {user_input}. Use vector_search tool if appropriate. Default table is 'KB'.",
+                tools=[self.engine.tools]
             )
             await update_status("✨ Generating response...", "generate")
             result["response_text"] = await self.engine.handle_model_response(response)

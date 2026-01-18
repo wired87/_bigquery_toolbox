@@ -29,10 +29,15 @@ class GeneralHandler:
         
         help_prompt = prompts.get_platform_help_prompt(user_input)
         
+        if not self.engine.chat_session:
+            result["response_text"] = "⚠️ AI features unavailable (Auth Error)."
+            return result
+
         try:
-            response = await asyncio.wait_for(
-                self.engine.chat_session.send_message_async(help_prompt),
-                timeout=60.0
+            # Use to_thread with sync method to avoid Event Loop Closed issues in Streamlit
+            response = await asyncio.to_thread(
+                self.engine.chat_session.send_message,
+                help_prompt
             )
             result["response_text"] = response.text
             print(f"✅ Platform help response received: {response} ({len(response.text)} chars)")

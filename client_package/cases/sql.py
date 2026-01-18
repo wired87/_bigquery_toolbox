@@ -52,7 +52,7 @@ class SQLHandler:
         
         # 1. Select Tables (Forced to KB)
         relevant_tables = ["KB"]
-        formatted_table_names = [f"{self.engine.project_id}.{self.engine.current_dataset_id}.KB"]
+        formatted_table_names = [f"{self.engine.pid}.{self.engine.current_dataset_id}.KB"]
         await update_status(f"✅ Selected knowledge base: {formatted_table_names[0]}", "tables_selected")
         
         # 3. Get Schemas
@@ -76,6 +76,12 @@ class SQLHandler:
             json.dumps(schemas, indent=2)
         )
         
+        if not self.engine.model:
+             return {
+                "intent": "query_sql_generation",
+                "response_text": "⚠️ AI features unavailable (Auth Error). Cannot generate SQL."
+            }
+
         response = await asyncio.wait_for(
             self.engine.model.generate_content_async(prompt),
             timeout=60.0

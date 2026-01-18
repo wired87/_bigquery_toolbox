@@ -19,6 +19,18 @@ def render():
         st.title("🧰 Toolbox")
         st.warning(f"Logged in: {st.session_state.user_email}")
         
+        st.subheader("🛠 Workflow Mode")
+        mode = st.radio(
+            "Select Operation Mode",
+            ["Auto", "General", "SQL", "Vector", "Ingest"],
+            index=0,
+            key="workflow_mode_radio",
+            help="Force a specific workflow or let AI decide (Auto)"
+        )
+        st.session_state.workflow_mode = mode
+
+        st.divider()
+
         # Server Info
         with st.expander("System Status"):
             stats = st.session_state.rag_core.get_stats()

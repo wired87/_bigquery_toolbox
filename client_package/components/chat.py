@@ -46,7 +46,9 @@ def render():
     for msg in st.session_state.messages:
         role = msg["role"]
         with st.chat_message(role, avatar="🤖" if role == "assistant" else "👤"):
-            st.markdown(msg["content"])
+            # st.markdown(msg["content"]) -> Wrapped
+            css_class = "user-message" if role == "user" else "assistant-message"
+            st.markdown(f'<div class="{css_class}">{msg["content"]}</div>', unsafe_allow_html=True)
             if msg.get("query_result"):
                 with st.expander("📊 Query Results", expanded=False):
                     st.dataframe(pd.DataFrame(msg["query_result"]))
@@ -85,7 +87,7 @@ def render():
         # For immediate feedback:
         
         with st.chat_message("user", avatar="👤"):
-            st.markdown(active_prompt)
+            st.markdown(f'<div class="user-message">{active_prompt}</div>', unsafe_allow_html=True)
             
         # 2. Assistant Response
         with st.chat_message("assistant", avatar="🤖"):
@@ -107,15 +109,33 @@ def render():
                     if not user_input.strip():
                         return {"response_text": "Please enter a message.", "intent": "none"}
 
-                    # 1. Classify
-                    await status_cb("🧠 Analyzing request...", "classify")
-                    # Using engine's classify for now (shared util)
-                    intent = await engine.classify_intent(user_input)
                     
-                    # 2. Rewrite (if not ingest)
-                    if intent not in ["upload_by_path", "command_upload_by_path"]:
+                    # 1. Determine Intent (Auto or Forced)
+                    mode = st.session_state.get("workflow_mode", "Auto")
+                    
+                    if mode == "Auto":
+                        await status_cb("🧠 Analyzing request...", "classify")
+                        intent = await engine.classify_intent(user_input)
+                    elif mode == "SQL":
+                        intent = "query_sql_generation"
+                    elif mode == "Vector":
+                        intent = "query_similarity_search"
+                    elif mode == "Ingest":
+                        intent = "upload_by_path"
+                    else: # General
+                        intent = "query_non_db_chat"
+                    
+                    # 2. Rewrite (if not ingest and not SQL/Vector forced to avoid interfering with testing)
+                    # We only rewrite in Auto mode or if specifically needed. 
+                    # For strict testing, let's skip rewrite if forced, unless it's General.
+                    if mode == "Auto" and intent not in ["upload_by_path", "command_upload_by_path"]:
                         await status_cb("🔄 Checking context...", "rewrite")
                         user_input = await engine.rewrite_user_input(user_input)
+                    elif mode == "General":
+                         # Still rewrite for general chat to keep it fluid
+                         await status_cb("🔄 Checking context...", "rewrite")
+                         user_input = await engine.rewrite_user_input(user_input)
+
                     
                     # 3. Dispatch to Cases
                     # Import handlers which are initialized in engine (or import classes directly)
@@ -167,7 +187,7 @@ def render():
                 if intent == "error":
                     st.error(response_txt)
                 else:
-                    resp_container.markdown(response_txt)
+                    resp_container.markdown(f'<div class="assistant-message">{response_txt}</div>', unsafe_allow_html=True)
 
                     # Append to history
                     st.session_state.messages.append({

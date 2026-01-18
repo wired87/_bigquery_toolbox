@@ -179,7 +179,7 @@ class IngestHandler:
             # Post-ingestion verification
             try:
                 table_id = getattr(self.engine, 'current_table_id', 'KB')
-                query = f"SELECT COUNT(*) as count FROM `{self.engine.bqclint.project_id}.{self.engine.current_dataset_id}.{table_id}` WHERE file_id = '{filename}'"
+                query = f"SELECT COUNT(*) as count FROM `{self.engine.bqclient.project}.{self.engine.current_dataset_id}.{table_id}` WHERE file_id = '{filename}'"
                 results = self.engine.bq_client.query(query).result()
                 for row in results:
                     return f"✅ {result_message} (Verified: {row.count} rows)"
