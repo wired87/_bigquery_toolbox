@@ -65,12 +65,34 @@ def get_sql_generation_prompt(user_input: str, formatted_table_names: str, conte
     Use the fully qualified table names provided.
     
     CRITICAL RULES:
-    1. Use Standard SQL syntax for BigQuery.
-    2. Use `LIMIT n` instead of `TOP n`.
-    3. Return ONLY the raw SQL string. Do NOT use markdown code blocks (```sql ... ```).
-    4. Ensure column names exist in the provided schema.
-    5. Pay attention to 'mode': 'REPEATED' in the schema. These are ARRAYs and require UNNEST() to query effectively if filtering by value.
-    6. Use the provided table metadata (row counts, etc.) to optimize your query (e.g. don't SELECT * on massive tables).
+    1. First, think step-by-step (Chain-of-Thought) about which tables are needed and how they join.
+    2. Then, write the SQL.
+    3. Use Standard SQL syntax for BigQuery.
+    4. Use `LIMIT n` instead of `TOP n`.
+    5. Return ONLY the raw SQL string. Do NOT use markdown code blocks (```sql ... ```).
+    6. Ensure column names exist in the provided schema.
+    7. Pay attention to 'mode': 'REPEATED' in the schema. These are ARRAYs and require UNNEST() to query effectively if filtering by value.
+    8. Use the provided table metadata (row counts, etc.) to optimize your query.
+
+    COMMON COLUMN MAPPINGS (Use these if applicable):
+    - "Filename", "Source File", "File" -> `file_id`
+    - "Date", "Timestamp", "Created" -> `ingested_at`
+    - "Text", "Body", "Document" -> `content`
+    """
+
+def get_query_expansion_prompt(user_input: str) -> str:
+    return f"""
+    You are a Search Query Optimizer.
+    Your goal is to improve the retrieval of relevant documents by expanding the user's query.
+
+    User Input: "{user_input}"
+
+    Generate 3 distinct search variations using these strategies:
+    1. **Decomposition**: Break complex questions into simpler keyword phrases.
+    2. **Synonyms**: Use professional or technical synonyms for key terms.
+    3. **Hypothetical Answer**: What key phrases would appear in a document that answers this?
+
+    Return ONLY a JSON list of strings. Example: ["variation 1", "variation 2", "variation 3"]
     """
 
 def get_natural_answer_prompt(user_input: str, sql_query: str, query_result: str) -> str:

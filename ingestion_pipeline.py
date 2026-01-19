@@ -116,11 +116,16 @@ class ProductionIngestionPipeline:
 
         self.start_time = None
 
-    async def run_pipeline_for_bytes(self, filename: str, content: bytes, status_callback=None, metadata: Optional[Dict[str, Any]] = None):
+    async def run_pipeline_for_bytes(
+            self,
+            filename: str,
+            content: bytes,
+            status_callback=None,
+            metadata: Optional[Dict[str, Any]] = None):
         self.start_time = datetime.now()
         
-        async def report(msg):
-             if status_callback: await status_callback(msg, "pipeline")
+        async def report(msg, step=None):
+             if status_callback: await status_callback(msg, step or "pipeline")
 
         print(f"🚀 Processing file: {filename}")
         
@@ -128,44 +133,60 @@ class ProductionIngestionPipeline:
             print("❌ BigQuery client not available. Aborting pipeline.")
             return "Failed: Credentials missing on server."
 
-        # 1. Extraction (In-Memory)
-        await report(f"📑 Extracting content from {filename}...")
-        
-        docs:list[Document] = self.file_handler.process_bytes(filename, content)
-        if not docs:
-            print(f"No content extracted from {filename}")
-            await report("⚠️ No content extracted.")
-            return "No content extracted."
-
-        # 2. Transformation
-        await report(f"🧩 Chunking {len(docs)} documents...")
-        rows = self.transform_to_rows(filename, docs, metadata)
-        
-        # 3. Schema Check
-        await report("🛠️ Verifying BigQuery resources...")
-        await asyncio.to_thread(self.ensure_resources)
-        
-        # 4. Generate Embeddings (Vertex AI)
-        if self.embedding_model:
-            await report(f"🧠 Generating embeddings for {len(rows)} chunks...")
-            await asyncio.to_thread(self.generate_batch_embeddings, rows)
-        else:
-            await report("⚠️  Embedding model not available. Skipping embedding generation.")
+        try:
+            # 1. Extraction (In-Memory)
+            await report(f"📑 Extracting content from {filename}...")
             
-        # 5. Upsert (Optimized)
-        await report(f"💾 Upserting {len(rows)} rows to BigQuery...")
-        upsert_start = datetime.now()
-        count = await asyncio.to_thread(self.upsert_rows, rows)
-        upsert_time = (datetime.now() - upsert_start).total_seconds()
-        
-        total_time = (datetime.now() - self.start_time).total_seconds()
-        print(f"⏱️ Total processing time: {total_time:.2f}s (Upsert: {upsert_time:.2f}s)")
-        
-        if total_time > 4: 
-             print(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
-             await report(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
+            docs:list[Document] = self.file_handler.process_bytes(filename, content)
+            if not docs:
+                print(f"No content extracted from {filename}")
+                await report("⚠️ No content extracted.")
+                return "No content extracted."
 
-        return f"Processed {filename}: Ingested {count} rows."
+            # 2. Transformation
+            await report(f"🧩 Chunking {len(docs)} documents...")
+            rows = self.transform_to_rows(filename, docs, metadata)
+            
+            # 3. Schema Check
+            await report("🛠️ Verifying BigQuery resources...")
+            try:
+                await asyncio.to_thread(self.ensure_resources)
+            except Exception as e:
+                print(f"⚠️ Resource verification warning: {e}")
+                # Continue, as tables might already exist or simple schema update failed
+            
+            # 4. Generate Embeddings (Vertex AI)
+            if self.embedding_model:
+                await report(f"🧠 Generating embeddings for {len(rows)} chunks...")
+                
+                try:
+                    # No longer wrapping in to_thread here as the method itself is now async and handles internal blocking calls
+                    await self.generate_batch_embeddings(rows, status_callback=report)
+                except Exception as e:
+                     await report(f"⚠️ Embedding generation failed: {e}")
+                     print(f"Embedding error: {e}")
+            else:
+                await report("⚠️  Embedding model not available. Skipping embedding generation.")
+                
+            # 5. Upsert (Optimized)
+            await report(f"💾 Upserting {len(rows)} rows to BigQuery...")
+            upsert_start = datetime.now()
+            count = await asyncio.to_thread(self.upsert_rows, rows)
+            upsert_time = (datetime.now() - upsert_start).total_seconds()
+            
+            total_time = (datetime.now() - self.start_time).total_seconds()
+            print(f"⏱️ Total processing time: {total_time:.2f}s (Upsert: {upsert_time:.2f}s)")
+            
+            if total_time > 4: 
+                print(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
+                await report(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
+
+            return f"Processed {filename}: Ingested {count} rows."
+            
+        except Exception as e:
+            print(f"❌ Pipeline Critical Error: {e}")
+            await report(f"❌ Critical Pipeline Failure: {str(e)}")
+            raise e
 
 
 
@@ -540,7 +561,7 @@ class ProductionIngestionPipeline:
         print(f"✅ Upsert complete. {inserted_count}/{len(bq_rows)} rows inserted.")
         return inserted_count
 
-    def generate_batch_embeddings(self, rows: List[KnowledgeRow]):
+    async def generate_batch_embeddings(self, rows: List[KnowledgeRow], status_callback=None):
         """
         Generates embeddings for a list of rows using Vertex AI in batches.
         """
@@ -549,26 +570,57 @@ class ProductionIngestionPipeline:
 
         texts = [row.content for row in rows]
         # Vertex AI limit for text-embedding-004 is 250 instances per request
-        BATCH_SIZE = 250
+        # HOWEVER, there is also a token limit of 20,000 tokens per request.
+        # Reducing batch size to 50 to be safe.
+        BATCH_SIZE = 50
         all_embeddings = []
+        total_batches = (len(texts) + BATCH_SIZE - 1) // BATCH_SIZE
 
         print(f"🧠 Generating embeddings for {len(texts)} rows in batches of {BATCH_SIZE}...")
         
         for i in range(0, len(texts), BATCH_SIZE):
+            batch_num = i // BATCH_SIZE + 1
             batch_texts = texts[i : i + BATCH_SIZE]
+            
+            # Report progress
+            if status_callback:
+                await status_callback(f"🧠 Generating embeddings: Batch {batch_num}/{total_batches}...", "embedding")
+
             try:
-                # Local Embedding Call
-                embeddings = self.embedding_model.get_embeddings(batch_texts)
+                # Local Embedding Call - needs to be awaited if blocking, but Vertex SDK is sync by default
+                embeddings = await self.safe_get_embeddings(batch_texts)
                 all_embeddings.extend([e.values for e in embeddings])
-                print(f"   Processed batch {i // BATCH_SIZE + 1}...")
+                print(f"   Processed batch {batch_num}...")
             except Exception as e:
                 print(f"❌ Failed to generate embeddings for batch {i}: {e}")
+                if status_callback:
+                    await status_callback(f"❌ Embedding Error (Batch {batch_num}): {str(e)[:100]}...", "error")
                 # Pad with empty lists if error
                 all_embeddings.extend([[] for _ in range(len(batch_texts))])
 
         # Map back to rows
         for row, emb in zip(rows, all_embeddings):
             row.embedding = emb
+
+    async def safe_get_embeddings(self, texts: List[str]):
+        """
+        Wrapper to handle token limit errors by splitting batches recursively.
+        """
+        try:
+             return await asyncio.to_thread(self.embedding_model.get_embeddings, texts)
+        except Exception as e:
+             err_str = str(e).lower()
+             if "token count" in err_str and len(texts) > 1:
+                 # Recursive split
+                 mid = len(texts) // 2
+                 print(f"⚠️ Token limit hit. Splitting batch of {len(texts)} into {mid} and {len(texts)-mid}...")
+                 left = await self.safe_get_embeddings(texts[:mid])
+                 right = await self.safe_get_embeddings(texts[mid:])
+                 return left + right
+             else:
+                 raise e
+
+
 
     def generate_missing_embeddings(self):
          pass # Handled in batch

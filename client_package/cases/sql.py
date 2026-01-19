@@ -96,14 +96,59 @@ class SQLHandler:
                 "response_text": "⚠️ AI features unavailable (Auth Error). Cannot generate SQL."
             }
 
-        response = await asyncio.wait_for(
-            asyncio.to_thread(self.engine.model.generate_content, prompt),
-            timeout=60.0
-        )
-        sql_query = response.text.replace("```sql", "").replace("```", "").strip()
-        print(f"📝 Generated SQL: {sql_query}")
+        async def generate_and_validate(attempt=1, last_error=None):
+            if attempt > 2: # Max retries
+                raise Exception(f"Failed to generate valid SQL after 2 attempts. Last error: {last_error}")
+
+            current_prompt = prompt
+            if last_error:
+                current_prompt += f"\n\nprevious_sql_error: {last_error}\nFIX THE SQL."
+
+            response = await asyncio.wait_for(
+                asyncio.to_thread(self.engine.model.generate_content, current_prompt),
+                timeout=60.0
+            )
+            raw_sql = response.text.replace("```sql", "").replace("```", "").strip()
+            
+            # Extract SQL if CoT is present (look for last SELECT statement if mixed with text, or basic cleanup)
+            # Simple heuristic: if "SELECT" is not at start, try to find it. 
+            # But the prompt asks for "Return ONLY the raw SQL string".
+            # If CoT is followed, the model might output text then SQL. 
+            # Let's trust the "Then, write the SQL" instruction but handle potential chatter.
+            sql_query = raw_sql
+            if "SELECT" in raw_sql:
+                idx = raw_sql.find("SELECT")
+                sql_query = raw_sql[idx:]
+            
+            print(f"📝 Generated SQL (Attempt {attempt}): {sql_query}")
+
+            # DRY RUN VALIDATION
+            await update_status(f"🧪 Dry run validation (Attempt {attempt})...", "dry_run")
+            try:
+                # Use bq_client (raw google client) for dry run
+                job_config = self.engine.bqclient.query_defaults if hasattr(self.engine.bqclient, 'query_defaults') else None
+                # Create a dry run config
+                from google.cloud import bigquery
+                dry_run_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+                
+                # Check query validity
+                self.engine.bqclient.query(sql_query, job_config=dry_run_config)
+                print("✅ Dry run successful.")
+                return sql_query
+            except Exception as e:
+                print(f"❌ Dry run failed: {e}")
+                return await generate_and_validate(attempt+1, str(e))
+
+        # Start Generation Loop
+        try:
+             sql_query = await generate_and_validate()
+        except Exception as e:
+             return {
+                "intent": "query_sql_generation",
+                "response_text": f"Could not generate valid SQL: {e}"
+            }
         
-        # 5. Execute SQL
+        # 5. Execute SQL (Real Run)
         await update_status("⚡ Executing query on BigQuery...", "execute_query")
         try:
              # Use engine.bq_core to run query

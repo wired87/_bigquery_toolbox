@@ -174,13 +174,18 @@ class IngestHandler:
             pipeline = ProductionIngestionPipeline(config)
             
             await update_status(f"🚀 Initializing extraction for {filename}...", "extract")
-            result_message = await pipeline.run_pipeline_for_bytes(filename, content, status_callback=update_status, metadata=metadata)
-            
+            result_message = await pipeline.run_pipeline_for_bytes(
+                filename,
+                content,
+                status_callback=update_status,
+                metadata=metadata
+            )
+
             # Post-ingestion verification
             try:
                 table_id = getattr(self.engine, 'current_table_id', 'KB')
                 query = f"SELECT COUNT(*) as count FROM `{self.engine.bqclient.project}.{self.engine.current_dataset_id}.{table_id}` WHERE file_id = '{filename}'"
-                results = self.engine.bq_client.query(query).result()
+                results = self.engine.bqclient.query(query).result()
                 for row in results:
                     return f"✅ {result_message} (Verified: {row.count} rows)"
             except Exception as e:

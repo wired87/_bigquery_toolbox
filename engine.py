@@ -439,6 +439,33 @@ class CoreEngine(BQCore):
         # 2. Rewrite Query (if needed, mostly for search/SQL)
         if intent in ["query_sql_generation", "query_similarity_search"]:
             user_input = await self.rewrite_user_input(user_input)
+
+            # --- Query Expansion (Ph 1.1) ---
+            if intent == "query_similarity_search":
+                try:
+                    if status_callback: await status_callback("🧠 Expanding query...", "expand")
+                    expand_prompt = prompts.get_query_expansion_prompt(user_input)
+                    exp_resp = await asyncio.to_thread(self.model.generate_content, expand_prompt)
+                    variations = json.loads(exp_resp.text.strip().replace("```json", "").replace("```", ""))
+                    if isinstance(variations, list):
+                        # For now, just append variations to the input via a context note 
+                        # This passes "Input + Variations" to the vector handler
+                        # Ideally, VectorHandler should run multiple searches (RRF), but for Step 1, we start simple context augmentation.
+                        # Wait, appending to input might confuse the embedding unless designed for it.
+                        # Better approach for V1: Append to user_input in a structured way that VectorHandler might use, 
+                        # OR just let the handler assume it's one expanded query block.
+                        # "Main Query. Related: Var1, Var2"
+                        expansion_text = ", ".join(variations)
+                        print(f"🧠 Query Expansion: {expansion_text}")
+                        # user_input = f"{user_input} (Related: {expansion_text})"
+                        # Let's keep user_input clean but pass expansion via a side channel? 
+                        # VectorHandler.handle signature is process(user_input, status).
+                        # Let's simply append for now as the simplest modification without changing handler signature.
+                        # Actually, a better way is to search for the variations joined.
+                        # Let's trust the "Related" context approach to rich embedding.
+                        user_input = f"{user_input}\nContextual Variations: {expansion_text}"
+                except Exception as e:
+                    print(f"Expansion failed (skipping): {e}")
             
         print(f"➡️  Route: {intent} | Query: {user_input}")
         

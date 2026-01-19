@@ -70,28 +70,7 @@ def render():
                     except Exception as e:
                         st.error(f"Upload failed: {e}")
 
-        # Function: Local Ingestion (Server-side path)
-        st.divider()
-        st.subheader("📂 Server Ingestion")
-        server_path = st.text_input("Server Path", value="./data_dir")
-        if st.button("Ingest Path"):
-             with st.spinner("Processing path..."):
-                status_ph = st.empty()
-                async def status_cb(msg, step):
-                    status_ph.caption(f"⚡ {step}: {msg}")
-                
-                # Direct Engine Call via IngestHandler
-                engine = st.session_state.rag_core.engine
-                try:
-                    res = run_async(engine.ingest_handler.ingest_from_path(
-                        server_path, 
-                        status_callback=status_cb
-                    ))
-                    st.success("Ingestion Finished")
-                    with st.expander("Report"):
-                        st.write(res.get("response_text"))
-                except Exception as e:
-                    st.error(f"Error: {e}")
+
 
         st.divider()
         if st.button("Logout"):

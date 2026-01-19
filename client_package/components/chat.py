@@ -66,6 +66,7 @@ def render():
 
     if active_prompt:
         # 1. User Message
+        print(f"\n[USER] {active_prompt}")
         st.session_state.messages.append({"role": "user", "content": active_prompt})
         
         # If it was a voice prompt, we need to explicitly render the user message now
@@ -95,6 +96,7 @@ def render():
             status_container = st.empty()
             
             async def status_cb(msg, step):
+                print(f"[{step.upper()}] {msg}")
                 status_container.caption(f"⚙️ {msg}...")
             
             try:
@@ -187,6 +189,7 @@ def render():
                 if intent == "error":
                     st.error(response_txt)
                 else:
+                    print(f"[ASSISTANT] {response_txt}")
                     resp_container.markdown(f'<div class="assistant-message">{response_txt}</div>', unsafe_allow_html=True)
 
                     # Append to history
