@@ -54,4 +54,4 @@ def render():
                     else:
                         st.error(msg)
         
-        st.info("Debugging? Try `admin@example.com` / `admin123` if configured.")
+        #st.info("Debugging? Try `admin@example.com` / `admin123` if configured.")
