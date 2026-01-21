@@ -16,21 +16,21 @@ def run_async(coro):
         raise e
 
 
-from client_package.speech_handler import SpeechHandler
+"""from client_package.speech_handler import SpeechHandler
 
 # Initialize Speech Handler in Session State
 if "speech_handler" not in st.session_state:
     st.session_state.speech_handler = SpeechHandler(input_enabled=True, output_enabled=True)
-
+"""
 def render():
     st.title("💬 BigQuery AI Assistant")
     
     # --- Voice Controls ---
-    col1, col2 = st.columns([1, 4])
-    with col1:
+    #col1, col2 = st.columns([1, 4])
+    """with col1:
         voice_mode = st.toggle("🔊 Read Aloud", value=False)
-    
-    voice_prompt = None
+    """
+    """voice_prompt = None
     with col2:
         if st.button("🎤 Voice Input"):
             with st.spinner("Listening..."):
@@ -41,7 +41,7 @@ def render():
                     time.sleep(1)
                 else:
                     st.warning("No speech detected.")
-
+    """
     # Render History
     for msg in st.session_state.messages:
         role = msg["role"]
@@ -62,7 +62,7 @@ def render():
     
     prompt = st.chat_input("Ask about your data...")
     
-    active_prompt = voice_prompt if voice_prompt else prompt
+    active_prompt =  prompt #if prompt else voice_prompt
 
     if active_prompt:
         # 1. User Message
@@ -211,13 +211,14 @@ def render():
                             st.json(result["traceability"])
                     
                     # TTS Handler
+                    """
                     if voice_mode and st.session_state.speech_handler:
                         st.session_state.speech_handler.speak(response_txt)
-
+                    """
             except Exception as e:
                 status_container.empty()
                 st.error(f"Processing Error: {e}")
                 
         # Force Rerun to update history view properly
-        if voice_prompt:
-             st.rerun()
+        """if voice_prompt:
+             st.rerun()"""
