@@ -1,7 +1,0 @@
-typer
-rich
-websockets
-ray
-SpeechRecognition
-pyttsx3
-pyaudio
