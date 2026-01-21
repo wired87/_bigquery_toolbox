@@ -181,7 +181,7 @@ class CoreEngine(BQCore):
             return set()
 
 
-    def setup_credentials(self, path: str, creds_dict:dict):
+    def setup_credentials(self, path: str):
         abs_path = os.path.abspath(path)
         if os.path.exists(abs_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = abs_path

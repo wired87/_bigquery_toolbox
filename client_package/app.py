@@ -151,7 +151,7 @@ def get_core_system():
             with open(os.path.abspath("credentials.toml"), "w") as f:
                 json.dump(dict(st.secrets["gcp_service_account"]), f)
 
-            engine = CoreEngine(require_auth=True, creds_dict = dict(st.secrets["gcp_service_account"]))
+            engine = CoreEngine(require_auth=True, credentials_path="credentials.toml")
             
             # Initialize RAG Wrapper
             rag = RAGCore(engine)
