@@ -116,7 +116,6 @@ py-ubjson
 pyarrow
 pyasn1
 pyasn1_modules
-PyAudio
 pycparser
 pydantic
 pydantic-settings
