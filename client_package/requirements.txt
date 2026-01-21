@@ -22,7 +22,6 @@ channels
 charset-normalizer
 click
 colorama
-comtypes
 constantly
 cryptography
 daphne
@@ -127,13 +126,10 @@ Pygments
 pyOpenSSL
 pyparsing
 pypdf
-pypiwin32
 python-dateutil
 python-dotenv
-pyttsx3
 pytz
 pyvis
-pywin32
 PyYAML
 referencing
 reportlab
