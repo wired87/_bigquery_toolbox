@@ -38,6 +38,7 @@ DATA_DIR = "./data_dir"
 
 class CoreEngine(BQCore):
     def __init__(self, credentials_path: str = "credentials.json", require_auth: bool = False):
+
         self.setup_credentials(credentials_path)
         BQCore.__init__(self, dataset_id=None)
         self.console = Console()
@@ -180,7 +181,7 @@ class CoreEngine(BQCore):
             return set()
 
 
-    def setup_credentials(self, path: str):
+    def setup_credentials(self, path: str, creds_dict:dict):
         abs_path = os.path.abspath(path)
         if os.path.exists(abs_path):
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = abs_path

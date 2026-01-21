@@ -1,3 +1,4 @@
+import json
 
 import streamlit as st
 import asyncio
@@ -147,7 +148,10 @@ def get_core_system():
     try:
         # Initialize CoreEngine
         with st.spinner("Initializing AI Core Engine..."):
-            engine = CoreEngine(require_auth=True)
+            with open(os.path.abspath("credentials.toml"), "w") as f:
+                json.dump(dict(st.secrets["gcp_service_account"]), f)
+
+            engine = CoreEngine(require_auth=True, creds_dict = dict(st.secrets["gcp_service_account"]))
             
             # Initialize RAG Wrapper
             rag = RAGCore(engine)
