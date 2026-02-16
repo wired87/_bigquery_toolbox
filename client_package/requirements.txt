@@ -53,7 +53,6 @@ google-genai
 google-resumable-media
 googleapis-common-protos
 greenlet
-grpc-google-iam-v1
 grpcio
 grpcio-status
 h11
