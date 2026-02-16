@@ -159,6 +159,16 @@ def get_core_system():
             # Initialize RAG Wrapper
             rag = RAGCore(engine)
             
+            # Initialize VRAG pipeline (Vertex RAG + local fallback)
+            try:
+                from vrag import VRAGPipeline, VRAGConfig
+                vrag_config = VRAGConfig()
+                vrag_config.project_id = vrag_config.project_id or getattr(engine, "pid", None)
+                rag.vrag_pipeline = VRAGPipeline(config=vrag_config, engine=engine)
+            except ImportError as e:
+                rag.vrag_pipeline = None
+                print(f"VRAG pipeline unavailable: {e}")
+            
             # GlobalServerConfig removed (Serverless mode)
             return rag
     except Exception as e:

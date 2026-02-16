@@ -18,21 +18,28 @@ class PdfProcessor(BaseProcessor):
     def load_from_path(self, file_path: str) -> List[Document]:
         # This keeps compatibility with BaseProcessor.process_path
         # But for the full DataFrame requirement, use extract_to_dataframe
+        self.console.print(f"[blue]ℹ️  Loading PDF from path: {file_path}[/blue]")
         try:
             with open(file_path, "rb") as f:
                 content = f.read()
-            return self._process_pdf_html_to_docs(content, file_path)
+            docs = self._process_pdf_html_to_docs(content, file_path)
+            self.console.print(f"[green]✅ Successfully loaded {len(docs)} documents from {file_path}[/green]")
+            return docs
         except Exception as e:
             self.console.print(f"[red]❌ Error loading PDF {file_path}: {e}[/red]")
             return []
 
     def process_bytes(self, filename: str, content: bytes, category:str) -> List[Document]:
-        return self._process_pdf_html_to_docs(content, filename, category)
+        self.console.print(f"[blue]ℹ️  Processing PDF bytes for: {filename}[/blue]")
+        docs = self._process_pdf_html_to_docs(content, filename, category)
+        self.console.print(f"[green]✅ Successfully processed {len(docs)} documents from bytes for {filename}[/green]")
+        return docs
 
     def extract_to_dataframe(self, file_path: str, category=None) -> pd.DataFrame:
         """
         Extracts content from PDF and returns a pandas DataFrame with SOA structure.
         """
+        self.console.print(f"[blue]ℹ️  Extracting PDF to DataFrame: {file_path}[/blue]")
         try:
             with open(file_path, "rb") as f:
                 content = f.read()
@@ -57,7 +64,9 @@ class PdfProcessor(BaseProcessor):
                 }
                 rows.append(row)
             
-            return pd.DataFrame(rows)
+            df = pd.DataFrame(rows)
+            self.console.print(f"[green]✅ Successfully extracted {len(df)} rows to DataFrame from {file_path}[/green]")
+            return df
             
         except Exception as e:
             self.console.print(f"[red]❌ Error extracting PDF to DataFrame {file_path}: {e}[/red]")
@@ -81,6 +90,15 @@ class PdfProcessor(BaseProcessor):
 
             docs = []
             
+            # Define block-level tags that typically define structure
+            BLOCK_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote', 'pre', 'table', 'div', 'section', 'article'}
+            
+            def has_block_children(element: Tag) -> bool:
+                for child in element.children:
+                    if isinstance(child, Tag) and child.name in BLOCK_TAGS:
+                        return True
+                return False
+
             def traverse(tag: Tag, parent_id: Optional[str] = None):
                 if not isinstance(tag, Tag): return
                 
@@ -90,34 +108,41 @@ class PdfProcessor(BaseProcessor):
                     docs.extend(table_docs)
                     return  # Don't traverse children of table
 
-                # Get clean text content
-                text_content = tag.get_text(strip=True)
-                
-                # Only process tags that have actual text content
-                if text_content:
-                    node_id = str(uuid.uuid4())
-                    
-                    # Split logic using inherited text_splitter_small (LangChain)
-                    if len(text_content) > 200:
-                        splits = self.text_splitter_small.split_text(text_content)
-                    else:
-                        splits = [text_content]
-                        
-                    for i, split in enumerate(splits):
-                        docs.append(Document(
-                            page_content=split,
-                            metadata={
-                                "id": f"{node_id}_{i}",
-                                "file_name": filename,
-                                "html_tag": tag.name,
-                                "parent_ref": parent_id,
-                                "page_number": 1 # Limitation of HTML extraction: hard to get exact page without splitting pages first
-                            }
-                        ))
+                # Check if this tag is a "Leaf Block"
+                is_content_unit = (tag.name in {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'}) or \
+                                  (tag.name in BLOCK_TAGS and not has_block_children(tag))
 
-                    for child in tag.children:
-                        if isinstance(child, Tag):
-                            traverse(child, node_id)
+                if is_content_unit:
+                    # Get clean text content
+                    text_content = tag.get_text(" ", strip=True)
+                    
+                    if text_content and len(text_content) > 5:
+                        node_id = str(uuid.uuid4())
+                        
+                        # Split logic using inherited text_splitter_small (LangChain)
+                        if len(text_content) > 200:
+                            splits = self.text_splitter_small.split_text(text_content)
+                        else:
+                            splits = [text_content]
+                            
+                        for i, split in enumerate(splits):
+                            docs.append(Document(
+                                page_content=split,
+                                metadata={
+                                    "id": f"{node_id}_{i}",
+                                    "file_name": filename,
+                                    "html_tag": tag.name,
+                                    "parent_ref": parent_id,
+                                    "page_number": 1
+                                }
+                            ))
+                    return # Stop recursion
+
+                # Recurse for structural tags
+                for child in tag.children:
+                    if isinstance(child, Tag):
+                        # Pass the current parent_id down (skip structural nodes as parents since they aren't saved)
+                        traverse(child, parent_id)
 
             root = soup.body if soup.body else soup
             traverse(root)
@@ -195,4 +220,77 @@ class PdfProcessor(BaseProcessor):
         except Exception as e:
             print(f"Error processing table element: {e}")
         
+        return docs
+
+    def resolve_edges(self, docs: List[Document]) -> List[Document]:
+        """
+        Implements hierarchy linking and table-content connectivity.
+        """
+        self.console.print(f"[blue]ℹ️  Resolving edges for {len(docs)} documents[/blue]")
+        # 1. Initialize edge_ids
+        for d in docs:
+            if "edge_ids" not in d.metadata:
+                d.metadata["edge_ids"] = []
+                
+        node_map = {d.metadata.get("id"): d for d in docs if d.metadata.get("id")}
+        
+        # 2. Hierarchy Linking (Child -> Parent)
+        # Note: In our PDF extraction, parents (structural tags) might usually be virtual or
+        # created as their own nodes. If parent exists in docs, link to it.
+        for d in docs:
+            parent_id = d.metadata.get("parent_ref")
+            if parent_id and parent_id in node_map:
+                # Add parent to edge_ids
+                if parent_id not in d.metadata["edge_ids"]:
+                    d.metadata["edge_ids"].append(parent_id)
+                # Add self to parent's edge_ids (Bidirectional)
+                parent_doc = node_map[parent_id]
+                my_id = d.metadata.get("id")
+                if my_id and my_id not in parent_doc.metadata["edge_ids"]:
+                    parent_doc.metadata["edge_ids"].append(my_id)
+
+        # 3. Table Content Linking (Value-based)
+        # Group rows by table
+        table_rows = [d for d in docs if d.metadata.get("is_table_row")]
+        if len(table_rows) > 1:
+            # Build Value Index: value -> [doc_ids]
+            # We focus on "columns" dictionary in metadata
+            value_index = {}
+            for row in table_rows:
+                my_id = row.metadata.get("id")
+                cols = row.metadata.get("columns", {})
+                if not cols: continue
+                
+                for col_name, val in cols.items():
+                    val_str = str(val).strip()
+                    # Filter short/noise values
+                    if len(val_str) < 3 or val_str.lower() in ["nan", "none", "null", "total"]:
+                        continue
+                    
+                    if val_str not in value_index:
+                        value_index[val_str] = []
+                    value_index[val_str].append(my_id)
+            
+            # create edges for shared values
+            for val, ids in value_index.items():
+                if len(ids) > 1:
+                    # Link all these IDs to each other (Clique)
+                    # Limit clique size to avoid explosion? User said "collect all ids... within a edges list".
+                    # Let's link them.
+                    unique_ids = list(set(ids))
+                    for i in range(len(unique_ids)):
+                        for j in range(i + 1, len(unique_ids)):
+                            id_a = unique_ids[i]
+                            id_b = unique_ids[j]
+                            
+                            if id_a in node_map and id_b in node_map:
+                                doc_a = node_map[id_a]
+                                doc_b = node_map[id_b]
+                                
+                                if id_b not in doc_a.metadata["edge_ids"]:
+                                    doc_a.metadata["edge_ids"].append(id_b)
+                                if id_a not in doc_b.metadata["edge_ids"]:
+                                    doc_b.metadata["edge_ids"].append(id_a)
+        
+        self.console.print(f"[green]✅ Edges resolved for {len(docs)} documents[/green]")
         return docs

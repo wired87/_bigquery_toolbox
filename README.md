@@ -71,6 +71,10 @@ Now featuring **Local Core** mode with direct Streamlit-to-Engine integration, e
    python -m streamlit run client_package/app.py
    ```
 
+4. **Vertex RAG Engine (Optional)**
+   - RAG Engine uses `europe-west4` by default (us-central1/us-east1/us-east4 are allowlisted).
+   - Override: `VRAG_LOCATION=europe-west4` or `VRAG_LOCATION=us-west1` in `.env`.
+
 ## 📚 Documentation
 
 ### Core Modules

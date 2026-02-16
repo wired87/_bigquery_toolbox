@@ -7,13 +7,14 @@ import os
 from .pdf_processor import PdfProcessor
 from .table_processor import TableProcessor
 from .text_processor import TextProcessor
+from .image_processor import ImageProcessor
 
 class FileProcessorFacade:
     def __init__(self):
         self.console = Console()
         self.pdf_processor = PdfProcessor()
         self.table_processor = TableProcessor()
-        #self.image_processor = ImageProcessor()
+        self.image_processor = ImageProcessor()
         self.text_processor = TextProcessor()
 
     def process_file(self, file_path: str) -> List[Dict[str, Any]]:
@@ -48,12 +49,16 @@ class FileProcessorFacade:
 
     def _get_processor(self, filename: str):
         if filename.lower().endswith(".pdf"):
+            self.console.print(f"[blue]ℹ️  Selected PdfProcessor for {filename}[/blue]")
             return self.pdf_processor
         elif filename.lower().endswith(".csv"):
+            self.console.print(f"[blue]ℹ️  Selected TableProcessor for {filename}[/blue]")
             return self.table_processor
         elif filename.lower().endswith((".jpg", ".png", ".jpeg")):
+            self.console.print(f"[blue]ℹ️  Selected ImageProcessor for {filename}[/blue]")
             return self.image_processor
         else:
+            self.console.print(f"[blue]ℹ️  Selected TextProcessor for {filename}[/blue]")
             return self.text_processor
 
     def _get_category(self, filename: str) -> str:

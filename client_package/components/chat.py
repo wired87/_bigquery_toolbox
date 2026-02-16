@@ -1,224 +1,113 @@
+"""
+Chat component - RAG-based chat using RAGWorkflow from chat.py.
+Replaces previous intent-based logic with corpus retrieval + generation.
+"""
 
 import streamlit as st
 import asyncio
 import time
 import pandas as pd
 
-def run_async(coro):
-    """Helper to run async code in Streamlit's sync environment."""
+
+# Max time for chat processing (prevents indefinite hangs)
+CHAT_PROCESS_TIMEOUT = 90
+
+
+def run_async(coro, timeout: float = CHAT_PROCESS_TIMEOUT):
+    """Helper to run async code in Streamlit's sync environment. Applies timeout to prevent hangs."""
+    wrapped = asyncio.wait_for(coro, timeout=timeout)
     try:
-        return asyncio.run(coro)
+        return asyncio.run(wrapped)
     except RuntimeError as e:
         if "This event loop is already running" in str(e):
             loop = asyncio.get_running_loop()
-            future = asyncio.run_coroutine_threadsafe(coro, loop)
-            return future.result()
+            future = asyncio.run_coroutine_threadsafe(wrapped, loop)
+            return future.result(timeout=timeout + 10)
         raise e
+    except asyncio.TimeoutError:
+        raise TimeoutError(f"Chat processing timed out after {timeout}s")
 
 
-"""from client_package.speech_handler import SpeechHandler
-
-# Initialize Speech Handler in Session State
-if "speech_handler" not in st.session_state:
-    st.session_state.speech_handler = SpeechHandler(input_enabled=True, output_enabled=True)
-"""
 def render():
-    st.title("💬 BigQuery AI Assistant")
-    
-    # --- Voice Controls ---
-    #col1, col2 = st.columns([1, 4])
-    """with col1:
-        voice_mode = st.toggle("🔊 Read Aloud", value=False)
-    """
-    """voice_prompt = None
-    with col2:
-        if st.button("🎤 Voice Input"):
-            with st.spinner("Listening..."):
-                text = st.session_state.speech_handler.listen()
-                if text:
-                    voice_prompt = text
-                    st.success(f"Heard: {text}")
-                    time.sleep(1)
-                else:
-                    st.warning("No speech detected.")
-    """
-    # Render History
+    st.title("💬 BigQuery AI Assistant (RAG)")
+
+    # Render message history
     for msg in st.session_state.messages:
         role = msg["role"]
         with st.chat_message(role, avatar="🤖" if role == "assistant" else "👤"):
-            # st.markdown(msg["content"]) -> Wrapped
             css_class = "user-message" if role == "user" else "assistant-message"
             st.markdown(f'<div class="{css_class}">{msg["content"]}</div>', unsafe_allow_html=True)
             if msg.get("query_result"):
                 with st.expander("📊 Query Results", expanded=False):
                     st.dataframe(pd.DataFrame(msg["query_result"]))
             if msg.get("traceability"):
-                 with st.expander("🔍 Traceability"):
+                with st.expander("🔍 Traceability"):
                     st.json(msg["traceability"])
-    
-    # Handling Input (Voice OR Text)
-    # Note: st.chat_input cannot be set programmatically easily.
-    # We prioritize voice_prompt if it exists.
-    
+
     prompt = st.chat_input("Ask about your data...")
-    
-    active_prompt =  prompt #if prompt else voice_prompt
+    if not prompt:
+        return
 
-    if active_prompt:
-        # 1. User Message
-        print(f"\n[USER] {active_prompt}")
-        st.session_state.messages.append({"role": "user", "content": active_prompt})
-        
-        # If it was a voice prompt, we need to explicitly render the user message now
-        # (st.chat_input does it automatically differently? No, we always manual append)
-        # But for persistent history we just loop above.
-        # For the *current* turn, we should display it.
-        
-        # Actually, since we re-run on button click, the history loop above handles "past" messages.
-        # But the NEW message needs to be shown.
-        # Streamlit's chat_message block usually goes AFTER the specific input block.
-        
-        # IF voice_prompt was active, we are in the run where we have it.
-        # We appended it. The loop above already ran? 
-        # Yes, loop runs top to bottom. If we append NOW, it won't show in the loop above until NEXT rerun.
-        # So we render it immediately below.
-        
-        # HOWEVER, the standard pattern is: Loop History -> Get Input -> Append -> Render New -> Rerun
-        # But if we want it to persist, the next run handles it.
-        # For immediate feedback:
-        
-        with st.chat_message("user", avatar="👤"):
-            st.markdown(f'<div class="user-message">{active_prompt}</div>', unsafe_allow_html=True)
-            
-        # 2. Assistant Response
-        with st.chat_message("assistant", avatar="🤖"):
-            resp_container = st.empty()
-            status_container = st.empty()
-            
-            async def status_cb(msg, step):
-                print(f"[{step.upper()}] {msg}")
-                status_container.caption(f"⚙️ {msg}...")
-            
-            try:
-                # Call Engine capabilities directly from Component
-                # This replaces: result = run_async(st.session_state.rag_core.process(...))
-                
-                engine = st.session_state.rag_core.engine
-                
-                async def process_chat_logic(user_input, status_cb):
-                    start_time = time.time()
-                    
-                    if not user_input.strip():
-                        return {"response_text": "Please enter a message.", "intent": "none"}
+    # 1. User message
+    print(f"\n[USER] {prompt}")
+    st.session_state.messages.append({"role": "user", "content": prompt})
 
-                    
-                    # 1. Determine Intent (Auto or Forced)
-                    mode = st.session_state.get("workflow_mode", "Auto")
-                    
-                    if mode == "Auto":
-                        await status_cb("🧠 Analyzing request...", "classify")
-                        intent = await engine.classify_intent(user_input)
-                    elif mode == "SQL":
-                        intent = "query_sql_generation"
-                    elif mode == "Vector":
-                        intent = "query_similarity_search"
-                    elif mode == "Ingest":
-                        intent = "upload_by_path"
-                    else: # General
-                        intent = "query_non_db_chat"
-                    
-                    # 2. Rewrite (if not ingest and not SQL/Vector forced to avoid interfering with testing)
-                    # We only rewrite in Auto mode or if specifically needed. 
-                    # For strict testing, let's skip rewrite if forced, unless it's General.
-                    if mode == "Auto" and intent not in ["upload_by_path", "command_upload_by_path"]:
-                        await status_cb("🔄 Checking context...", "rewrite")
-                        user_input = await engine.rewrite_user_input(user_input)
-                    elif mode == "General":
-                         # Still rewrite for general chat to keep it fluid
-                         await status_cb("🔄 Checking context...", "rewrite")
-                         user_input = await engine.rewrite_user_input(user_input)
+    with st.chat_message("user", avatar="👤"):
+        st.markdown(f'<div class="user-message">{prompt}</div>', unsafe_allow_html=True)
 
-                    
-                    # 3. Dispatch to Cases
-                    # Import handlers which are initialized in engine (or import classes directly)
-                    # For now, using engine's initialized handlers
-                    
-                    result = {
-                        "intent": intent,
-                        "response_text": "",
-                        "source_citation": None,
-                        "traceability": None
-                    }
-                    print("process_chat_logic result", result)
-                    if intent == "query_similarity_search":
-                        result = await engine.vector_handler.handle(user_input, status_cb)
-                        
-                    elif intent == "query_sql_generation":
-                        result = await engine.sql_handler.handle(user_input, status_cb)
-                            
-                    elif intent == "upload_by_path":
-                         # Chat-based ingest trigger
-                        result = await engine.ingest_handler.handle(user_input, status_cb)
+    # 2. Assistant response - use RAGWorkflow (chat.py logic)
+    with st.chat_message("assistant", avatar="🤖"):
+        resp_container = st.empty()
+        status_container = st.empty()
 
-                    else:  # query_non_db_chat
-                        result = await engine.general_handler.handle(user_input, status_cb)
+        def status_cb(msg: str, step: str = ""):
+            print(f"[{step.upper()}] {msg}")
+            status_container.caption(f"⚙️ {msg}...")
 
-                    # 4. History Saving (Component Logic)
-                    if engine.current_user_email:
-                         try:
-                            engine.db.add_message(engine.current_user_email, "user", active_prompt) # Use original prompt
-                            engine.db.add_message(engine.current_user_email, "assistant", result["response_text"])
-                         except Exception:
-                             pass
-                    
-                    return result
+        try:
+            from client_package.workflows import RAGWorkflow
+            rag_core = st.session_state.rag_core
+            workflow = RAGWorkflow(rag_core.engine, rag_core)
+            mode = st.session_state.get("workflow_mode", "Auto")
 
-                # Run the async logic
-                result = run_async(process_chat_logic(active_prompt, status_cb))
-                
-                status_container.empty() # Clear status
-                
-                # Debugging: View raw result
-                with st.expander("Debug Result"):
-                    st.json(result) 
-                
-                response_txt = result.get("response_text", "No response.")
-                intent = result.get("intent", "unknown")
-                
-                # Check for errors in intent
-                if intent == "error":
-                    st.error(response_txt)
-                else:
-                    print(f"[ASSISTANT] {response_txt}")
-                    resp_container.markdown(f'<div class="assistant-message">{response_txt}</div>', unsafe_allow_html=True)
+            result = run_async(workflow.process_chat(prompt, mode=mode, status_callback=status_cb))
+            status_container.empty()
 
-                    # Append to history
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": response_txt,
-                        "query_result": result.get("query_result"),
-                        "traceability": result.get("traceability"),
-                        "intent": intent
-                    })
-                    
-                    # Show extra data immediately
-                    if result.get("query_result"):
-                        with st.expander("📊 Query Results", expanded=True):
-                            st.dataframe(pd.DataFrame(result["query_result"]))
-                    
-                    if result.get("traceability"):
-                        with st.expander("🔍 Traceability"):
-                            st.json(result["traceability"])
-                    
-                    # TTS Handler
-                    """
-                    if voice_mode and st.session_state.speech_handler:
-                        st.session_state.speech_handler.speak(response_txt)
-                    """
-            except Exception as e:
-                status_container.empty()
-                st.error(f"Processing Error: {e}")
-                
-        # Force Rerun to update history view properly
-        """if voice_prompt:
-             st.rerun()"""
+            response_txt = result.get("response_text", "No response.")
+            intent = result.get("intent", "unknown")
+
+            engine = rag_core.engine
+            if engine.current_user_email:
+                try:
+                    engine.db.add_message(engine.current_user_email, "user", prompt)
+                    engine.db.add_message(engine.current_user_email, "assistant", response_txt)
+                except Exception:
+                    pass
+
+            if intent == "error":
+                st.error(response_txt)
+            else:
+                print(f"[ASSISTANT] {response_txt}")
+                resp_container.markdown(
+                    f'<div class="assistant-message">{response_txt}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response_txt,
+                    "query_result": result.get("query_result"),
+                    "traceability": result.get("traceability"),
+                    "intent": intent,
+                })
+                if result.get("query_result"):
+                    with st.expander("📊 Query Results", expanded=True):
+                        st.dataframe(pd.DataFrame(result["query_result"]))
+                if result.get("traceability"):
+                    with st.expander("🔍 Traceability"):
+                        st.json(result["traceability"])
+        except (asyncio.TimeoutError, TimeoutError):
+            status_container.empty()
+            st.error(f"Request timed out after {CHAT_PROCESS_TIMEOUT}s. Try a shorter query.")
+        except Exception as e:
+            status_container.empty()
+            st.error(f"Processing Error: {e}")
