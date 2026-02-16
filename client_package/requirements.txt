@@ -110,7 +110,7 @@ plotly
 prompt_toolkit
 propcache
 proto-plus
-protobuf
+protobuf==3.20.3
 pure_eval
 py-ubjson
 pyarrow
@@ -150,7 +150,7 @@ stack-data
 standard-aifc
 standard-chunk
 starlette
-streamlit
+streamlit==1.54.0
 sympy
 tabulate
 tenacity
@@ -172,7 +172,6 @@ urllib3
 uuid_utils
 uvicorn
 validators
-vanna
 watchdog
 wcwidth
 websockets
