@@ -22,7 +22,6 @@ channels
 charset-normalizer
 click
 colorama
-
 constantly
 cryptography
 daphne
@@ -111,12 +110,12 @@ plotly
 prompt_toolkit
 propcache
 proto-plus
+protobuf
 pure_eval
 py-ubjson
 pyarrow
 pyasn1
 pyasn1_modules
-PyAudio
 pycparser
 pydantic
 pydantic-settings
@@ -126,13 +125,10 @@ Pygments
 pyOpenSSL
 pyparsing
 pypdf
-
 python-dateutil
 python-dotenv
-pyttsx3
 pytz
 pyvis
-
 PyYAML
 referencing
 reportlab
@@ -154,7 +150,7 @@ stack-data
 standard-aifc
 standard-chunk
 starlette
-streamlit>=1.42.0
+streamlit==1.52.2
 sympy
 tabulate
 tenacity
