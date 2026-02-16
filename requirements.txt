@@ -154,7 +154,7 @@ stack-data
 standard-aifc
 standard-chunk
 starlette
-streamlit
+streamlit>=1.42.0
 sympy
 tabulate
 tenacity
