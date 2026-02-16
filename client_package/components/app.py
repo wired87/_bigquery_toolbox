@@ -103,7 +103,6 @@ st.markdown("""
         font-weight: 500;
     }
     
-    
     .user-message * {
         color: #000000 !important;
     }
@@ -151,7 +150,6 @@ def get_core_system():
         with st.spinner("Initializing AI Core Engine..."):
             with open(os.path.abspath("credentials.toml"), "w") as f:
                 json.dump(dict(st.secrets["gcp_service_account"]), f)
-
 
             engine = CoreEngine(
                 require_auth=True,
