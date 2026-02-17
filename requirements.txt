@@ -8,7 +8,6 @@ anyio
 asgiref
 asttokens
 attrs
-audioop-lts
 autobahn
 Automat
 beautifulsoup4

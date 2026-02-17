@@ -7,8 +7,6 @@ annotated-types
 anyio
 asgiref
 asttokens
-attrs
-audioop-lts
 autobahn
 Automat
 beautifulsoup4
@@ -169,12 +167,8 @@ ujson
 uritemplate
 urllib3
 uuid_utils
-uvicorn
 validators
 watchdog
-wcwidth
 websockets
 xxhash
 yarl
-zope.interface
-zstandard
