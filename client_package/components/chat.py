@@ -68,9 +68,8 @@ def render():
             from client_package.workflows import RAGWorkflow
             rag_core = st.session_state.rag_core
             workflow = RAGWorkflow(rag_core.engine, rag_core)
-            mode = st.session_state.get("workflow_mode", "Auto")
 
-            result = run_async(workflow.process_chat(prompt, mode=mode, status_callback=status_cb))
+            result = run_async(workflow.process_chat(prompt, status_callback=status_cb))
             status_container.empty()
 
             response_txt = result.get("response_text", "No response.")

@@ -8,7 +8,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from google import genai
 from google.genai.types import GenerateContentConfig, Retrieval, Tool, VertexRagStore
@@ -222,6 +222,98 @@ class RAGWorkflow:
         except ImportError:
             return None
 
+    def list_files(self) -> list:
+        """List files in the user's RAG corpus. Returns list of dicts with 'name', 'display_name'."""
+        corpus_name = self._get_corpus_name()
+        if not corpus_name:
+            return []
+        try:
+            from vrag.engine import VertexRAGEngine
+            from vrag.config import VRAGConfig
+            cfg = VRAGConfig()
+            cfg.project_id = cfg.project_id or self._get_project_id()
+            vrag = VertexRAGEngine(config=cfg, project_id=cfg.project_id)
+            return vrag.list_files(corpus_name) or []
+        except ImportError:
+            return []
+
+    def delete_file(self, rag_file_name: str) -> bool:
+        """Delete a file from the RAG corpus by full resource name."""
+        try:
+            from vrag.engine import VertexRAGEngine
+            from vrag.config import VRAGConfig
+            cfg = VRAGConfig()
+            cfg.project_id = cfg.project_id or self._get_project_id()
+            vrag = VertexRAGEngine(config=cfg, project_id=cfg.project_id)
+            return vrag.delete_file(rag_file_name)
+        except ImportError:
+            return False
+
+    def build_rag_prompt(
+        self,
+        user_query: str,
+        last_n_qa_pairs: int = 4,
+        include_file_names: bool = True,
+        token_usage: Optional[Dict[str, int]] = None,
+        model_name: Optional[str] = None,
+    ) -> str:
+        """
+        Generate a highly efficient RAG prompt for an LLM.
+        Uses Vertex AI RAG engine: list_files (file names), chat history (last N Q&A),
+        token usage. Compact format to minimize token cost.
+        """
+        sections: List[str] = []
+
+        # 1. Corpus file names (vertexai.rag.list_files)
+        if include_file_names:
+            files = self.list_files()
+            if files:
+                names = [
+                    (f.get("display_name") or f.get("name", "").split("/")[-1] or "file").strip()
+                    for f in files
+                ]
+                names = [n for n in names if n]
+                if names:
+                    sections.append(f"[CORPUS] {', '.join(names)}")
+
+        # 2. Last N Q&A pairs (engine.db chat history)
+        session_id = getattr(self.engine, "current_user_email", None)
+        if session_id:
+            db = getattr(self.engine, "db", None)
+            if db and hasattr(db, "get_recent_history"):
+                limit = last_n_qa_pairs * 2
+                history = db.get_recent_history(session_id, limit=limit)
+                pairs: List[str] = []
+                i = 0
+                while i + 1 < len(history):
+                    u, a = history[i], history[i + 1]
+                    if u.get("role") == "user" and a.get("role") == "assistant":
+                        q = (u.get("content") or "").strip()[:180]
+                        ans = (a.get("content") or "").strip()[:250]
+                        if q and ans:
+                            pairs.append(f"Q:{q} A:{ans}")
+                    i += 1
+                if pairs:
+                    recent = "; ".join(pairs[-last_n_qa_pairs:])
+                    sections.append(f"[RECENT] {recent}")
+
+        # 3. Token usage (from genai usage_metadata)
+        if token_usage:
+            inp = token_usage.get("input_tokens") or token_usage.get("prompt_tokens") or 0
+            out = token_usage.get("output_tokens") or token_usage.get("candidates_tokens") or 0
+            total = token_usage.get("total_tokens") or (inp + out)
+            if total:
+                sections.append(f"[USAGE] in={inp} out={out} tot={total}")
+
+        # 4. Model
+        if model_name:
+            sections.append(f"[MODEL] {model_name}")
+
+        header = " ".join(sections) if sections else ""
+        if header:
+            return f"{header}\n\n{user_query.strip()}"
+        return user_query.strip()
+
     def _run_async(self, coro, timeout: float):
         """Run async coroutine with timeout. Works in sync context (Streamlit)."""
         wrapped = asyncio.wait_for(coro, timeout=timeout)
@@ -267,13 +359,28 @@ class RAGWorkflow:
         rag_tool = self._build_rag_retrieval_tool(corpus_name)
         client = self._get_genai_client()
 
+        # Use efficient RAG prompt with metadata (files, recent QA, model)
+        full_prompt = self.build_rag_prompt(
+            user_query=prompt,
+            last_n_qa_pairs=4,
+            include_file_names=True,
+            token_usage=getattr(self, "_last_token_usage", None),
+            model_name=DEFAULT_RAG_MODEL,
+        )
+
         def _genai_generate():
             response = client.models.generate_content(
                 model=DEFAULT_RAG_MODEL,
-                contents=prompt.strip(),
+                contents=full_prompt,
                 config=GenerateContentConfig(tools=[rag_tool]),
             )
-            print("RAG response", response)
+            if response and hasattr(response, "usage_metadata") and response.usage_metadata:
+                um = response.usage_metadata
+                self._last_token_usage = {
+                    "input_tokens": getattr(um, "prompt_token_count", None) or getattr(um, "promptTokenCount", None) or 0,
+                    "output_tokens": getattr(um, "candidates_token_count", None) or getattr(um, "candidatesTokenCount", None) or 0,
+                    "total_tokens": getattr(um, "total_token_count", None) or getattr(um, "totalTokenCount", None) or 0,
+                }
             return response.text if response and response.text else ""
 
         try:

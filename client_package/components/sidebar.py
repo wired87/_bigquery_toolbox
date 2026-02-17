@@ -1,7 +1,40 @@
-"""Sidebar component: workflow mode, upload to RAG corpus, status, logout."""
+"""Sidebar component: upload to RAG corpus, RAG files list, status, logout."""
+import re
 import streamlit as st
 import time
 import asyncio
+
+
+def _safe_key(s: str) -> str:
+    """Create a unique Streamlit-safe key from file resource name."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", s)[-64:]  # unique suffix of resource name
+
+
+def _render_rag_files_list():
+    """List RAG corpus files with delete button. Rerenders after remove/add/edit."""
+    try:
+        from client_package.workflows import RAGWorkflow
+        rag_core = st.session_state.rag_core
+        workflow = RAGWorkflow(rag_core.engine, rag_core)
+        files = workflow.list_files()
+        if not files:
+            st.caption("No files in corpus yet. Upload a file below.")
+            return
+        for f in files:
+            name = f.get("name", "")
+            display_name = f.get("display_name", "") or name.split("/")[-1] or "file"
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.caption(display_name)
+            with col2:
+                if st.button("❌", key=f"del_{_safe_key(name)}", help="Remove from corpus"):
+                    if workflow.delete_file(name):
+                        st.success("Removed")
+                    else:
+                        st.error("Delete failed")
+                    st.rerun()
+    except Exception as e:
+        st.caption(f"Could not list files: {e}")
 
 
 def run_async(coro):
@@ -19,16 +52,6 @@ def render():
     with st.sidebar:
         st.title("🧰 Toolbox")
         st.warning(f"Logged in: {st.session_state.user_email}")
-        
-        st.subheader("🛠 Workflow Mode")
-        mode = st.radio(
-            "Select Operation Mode",
-            ["Auto", "General", "SQL", "Vector", "Ingest"],
-            index=0,
-            key="workflow_mode_radio",
-            help="Force a specific workflow or let AI decide (Auto)"
-        )
-        st.session_state.workflow_mode = mode
 
         st.divider()
 
@@ -46,7 +69,13 @@ def render():
 
         st.divider()
         
-        # Upload File - directly to user's RAG corpus (using RAGWorkflow from chat.py)
+        # RAG Corpus Files - list with delete
+        st.subheader("📚 RAG Corpus Files")
+        _render_rag_files_list()
+
+        st.divider()
+
+        # Upload File - directly to user's RAG corpus
         st.subheader("📄 Upload to RAG Corpus")
         uploaded_file = st.file_uploader(
             "Choose a file (PDF, text, etc)",

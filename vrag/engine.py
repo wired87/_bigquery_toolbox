@@ -291,7 +291,7 @@ class VertexRAGEngine:
         """List files in a corpus."""
         def _list():
             from vertexai import rag
-            files = list(rag.list_files(parent=corpus_name))
+            files = list(rag.list_files(corpus_name=corpus_name))
             return [
                 {"name": f.name, "display_name": getattr(f, "display_name", "")}
                 for f in files
