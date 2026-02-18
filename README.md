@@ -6,6 +6,12 @@ A powerful Python-based toolbox for intelligent BigQuery data management with AI
 ### **(do not use in prod)**
 https://bigquerytoolbox-enzybofsxdgofqtmqmxzgy.streamlit.app/
 
+todo dev:
+Get GCP creds.json file for Service Account(SA) granting roles BigQuery Admin, Vertex Ai Admin -> Convert to .toml (with Gem) -> paste in streamlit Advanced Settings (at App deployment)
+
+##Any issue? 
+Create @ /issues
+
 Now featuring **Local Core** mode with direct Streamlit-to-Engine integration, eliminating the need for a separate WebSocket server.
 
 ## 🌟 Key Features
