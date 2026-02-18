@@ -4,7 +4,7 @@ A powerful Python-based toolbox for intelligent BigQuery data management with AI
 
 ## DEMO 
 ### **(do not use in prod)**
-https://bigquerytoolbox.streamlit.app/
+https://bigquerytoolbox-enzybofsxdgofqtmqmxzgy.streamlit.app/
 
 Now featuring **Local Core** mode with direct Streamlit-to-Engine integration, eliminating the need for a separate WebSocket server.
 
