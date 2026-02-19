@@ -27,13 +27,13 @@ except ImportError as e:
 
 # --- Configuration ---
 st.set_page_config(
-    page_title="BigQuery AI Toolbox (Local Core)",
+    page_title="BigQuery AI Toolbox",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
         'Get Help': 'mailto:support@example.com',
-        'About': "# BigQuery AI Toolbox\nRunning in **Local Core** mode (No Websockets)"
+        'About': "# BigQuery AI Toolbox"
     }
 )
 

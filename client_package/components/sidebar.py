@@ -48,19 +48,8 @@ def run_async(coro):
             return future.result()
         raise e
 
-def render():
-    with st.sidebar:
-        st.title("🧰 Toolbox")
-        st.warning(f"Logged in: {st.session_state.user_email}")
-
-        st.divider()
-
-        # Server Info
-        with st.expander("System Status"):
-            stats = st.session_state.rag_core.get_stats()
-            st.write(stats)
-
-        # VRAG Pipeline Status
+"""#
+ # VRAG Pipeline Status
         vrag = getattr(st.session_state.rag_core, "vrag_pipeline", None)
         if vrag:
             with st.expander("📚 Vertex RAG (VRAG)"):
@@ -68,6 +57,18 @@ def render():
                 st.write("Status:", "Ready" if vrag.use_vertex_rag() else "Local only")
 
         st.divider()
+# Server Info
+with st.expander("System Status"):
+    stats = st.session_state.rag_core.get_stats()
+    st.write(stats)
+"""
+def render():
+    with st.sidebar:
+        st.title("🧰 Toolbox")
+        st.warning(f"Logged in: {st.session_state.user_email}")
+
+        st.divider()
+
         
         # RAG Corpus Files - list with delete
         st.subheader("📚 RAG Corpus Files")
