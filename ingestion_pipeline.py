@@ -59,7 +59,7 @@ class KnowledgeRow(BaseModel):
     content: str
     embedding: Optional[List[float]] = None # Populated by BQML if None
     metadata: str # JSON string for extra fields
-    ingested_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    ingested_at: str = Field(default_factory=lambda: datetime.now())
     parent_file_id: Optional[str] = None
     row_type: str = "chunk" 
     

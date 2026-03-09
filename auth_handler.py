@@ -1,4 +1,4 @@
-from a_b_c.bq_agent._bq_core.bq_handler import BQCore
+
 
 class BQAuthHandler(BQCore):
     """

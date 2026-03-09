@@ -1,10 +1,7 @@
 import logging
 import uuid
-import numpy as np
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field, asdict
-from bs4 import Tag
-from langchain_google_vertexai import VertexAIEmbeddings
 
 logger = logging.getLogger(__name__)
 

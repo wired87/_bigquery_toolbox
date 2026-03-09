@@ -3,7 +3,7 @@ import json
 from typing import List
 import dotenv
 
-from auth.load_sa_creds import load_service_account_credentials
+from qbrain.auth.load_sa_creds import load_service_account_credentials
 
 dotenv.load_dotenv()
 import networkx as nx
@@ -60,6 +60,217 @@ class BQGroundZero:
         except Exception as e:
             print(f"❌ Error checking dataset '{ds_name}': {e}")
 
+    # -------------------------------------------------------------------------
+    # Query templates (used by QBrainTableManager via qbrain._db.queries wrappers)
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def q_get_users_entries(ds_ref: str, table: str, user_id: str, select: str = "*"):
+        """Get user entries (latest per id)."""
+        query = f"""
+            SELECT {select}
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY created_at DESC) as row_num
+                FROM `{ds_ref}.{table}`
+                WHERE (user_id = @user_id OR user_id = 'public') AND (status != 'deleted' OR status IS NULL)
+            )
+            WHERE row_num = 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("user_id", "STRING", user_id)]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_list_session_entries(
+        ds_ref: str,
+        table: str,
+        user_id: str,
+        session_id: str,
+        select: str = "*",
+        partition_key: str = "id",
+    ):
+        """List entries linked to session (latest per partition)."""
+        query = f"""
+            SELECT {select}, status
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY {partition_key} ORDER BY created_at DESC) as row_num
+                FROM `{ds_ref}.{table}`
+                WHERE user_id = @user_id AND session_id = @session_id
+            )
+            WHERE row_num = 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+                bigquery.ScalarQueryParameter("session_id", "STRING", session_id),
+            ]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_get_envs_linked_rows(
+        ds_ref: str,
+        table_name: str,
+        env_id: str,
+        linked_row_id: str,
+        linked_row_id_name: str,
+        user_id: str,
+        select: str = "*",
+    ):
+        """Get linked rows for env."""
+        query = f"""
+            SELECT {select}
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY created_at DESC) as row_num
+                FROM `{ds_ref}.{table_name}`
+                WHERE env_id = @env_id AND {linked_row_id_name} = @{linked_row_id_name} AND user_id = @user_id
+                  AND (status != 'deleted' OR status IS NULL)
+            )
+            WHERE row_num = 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("env_id", "STRING", env_id),
+                bigquery.ScalarQueryParameter(linked_row_id_name, "STRING", linked_row_id),
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+            ]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_get_modules_linked_rows(
+        ds_ref: str,
+        table_name: str,
+        module_id: str,
+        linked_row_id: str,
+        linked_row_id_name: str,
+        user_id: str,
+        select: str = "*",
+    ):
+        """Get linked rows for module."""
+        query = f"""
+            SELECT {select}
+            FROM (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY id ORDER BY created_at DESC) as row_num
+                FROM `{ds_ref}.{table_name}`
+                WHERE module_id = @module_id AND {linked_row_id_name} = @{linked_row_id_name} AND user_id = @user_id
+                  AND (status != 'deleted' OR status IS NULL)
+            )
+            WHERE row_num = 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("module_id", "STRING", module_id),
+                bigquery.ScalarQueryParameter(linked_row_id_name, "STRING", linked_row_id),
+                bigquery.ScalarQueryParameter("user_id", "STRING", user_id),
+            ]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_row_from_id(ds_ref: str, table: str, ids: List[str], select: str = "*", user_id: str | None = None):
+        """Get rows by id list (latest per id)."""
+        query = f"""
+            SELECT {select}
+            FROM (
+                SELECT {select}, ROW_NUMBER() OVER (PARTITION BY id ORDER BY created_at DESC) as row_num
+                FROM `{ds_ref}.{table}`
+                WHERE id IN UNNEST(@id) AND (status != 'deleted' OR status IS NULL)
+            )
+            WHERE row_num = 1
+        """
+        params = [bigquery.ArrayQueryParameter("id", "STRING", ids)]
+        if user_id:
+            query += " AND user_id = @user_id"
+            params.append(bigquery.ScalarQueryParameter("user_id", "STRING", user_id))
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        return query, job_config
+
+    @staticmethod
+    def q_upsert_copy_select(table_ref: str, keys: dict):
+        """SELECT latest row for upsert_copy (fetch before insert)."""
+        where_clause = " AND ".join([f"{k} = @{k}" for k in keys.keys()])
+        query = f"""
+            SELECT * FROM `{table_ref}`
+            WHERE {where_clause}
+            ORDER BY created_at DESC LIMIT 1
+        """
+        params = []
+        for k, v in keys.items():
+            if isinstance(v, int):
+                params.append(bigquery.ScalarQueryParameter(k, "INT64", int(v)))
+            else:
+                params.append(bigquery.ScalarQueryParameter(k, "STRING", str(v)))
+        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        return query, job_config
+
+    @staticmethod
+    def q_get_user(pid: str, dataset_id: str, uid: str):
+        """Get user by id."""
+        query = f"""
+            SELECT * FROM `{pid}.{dataset_id}.users`
+            WHERE id = @uid AND (status != 'deleted' OR status IS NULL)
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("uid", "STRING", uid)]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_get_payment_record(pid: str, dataset_id: str, uid: str):
+        """Get payment record by user uid."""
+        query = f"""
+            SELECT * FROM `{pid}.{dataset_id}.payment`
+            WHERE uid = @uid AND (status != 'deleted' OR status IS NULL)
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("uid", "STRING", uid)]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_get_standard_stack(pid: str, dataset_id: str, user_id: str):
+        """Get user sm_stack_status."""
+        query = f"""
+            SELECT * FROM `{pid}.{dataset_id}.users`
+            WHERE id = @user_id AND (status != 'deleted' OR status IS NULL)
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("user_id", "STRING", user_id)]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_ensure_user_exists(pid: str, dataset_id: str, uid: str):
+        """Check if user exists."""
+        query = f"""
+            SELECT id FROM `{pid}.{dataset_id}.users`
+            WHERE id = @uid AND (status != 'deleted' OR status IS NULL)
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("uid", "STRING", uid)]
+        )
+        return query, job_config
+
+    @staticmethod
+    def q_ensure_payment_exists(pid: str, dataset_id: str, uid: str):
+        """Check if payment record exists by uid."""
+        query = f"""
+            SELECT id FROM `{pid}.{dataset_id}.payment`
+            WHERE uid = @uid AND (status != 'deleted' OR status IS NULL)
+            LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("uid", "STRING", uid)]
+        )
+        return query, job_config
+
 
 
     def sql_escape_string(self, s):
@@ -74,7 +285,7 @@ class BQGroundZero:
         return f"""
         MERGE INTO `{self.pid}.{self.ds_id}.{table_id.upper()}` T
         USING `{self.pid}.{self.ds_id}.{table_id.upper()}` S
-        ON T.nid = S.nid
+        ON T.id = S.id
         WHEN MATCHED THEN
           UPDATE SET
             T.column1 = S.column1,
@@ -82,7 +293,7 @@ class BQGroundZero:
             T.last_updated = CURRENT_TIMESTAMP() 
         WHEN NOT MATCHED THEN
           INSERT (nid, column1, column2)
-          VALUES (S.nid, S.column1, S.column2);
+          VALUES (S.id, S.column1, S.column2);
         """
 
     def upsert_row_query(self, table_id: str, rows: list[dict], schema: dict[str]) -> str:
@@ -182,7 +393,7 @@ class BQGroundZero:
         insert_vals = ", ".join(insert_vals_list)
 
         # Primary Key
-        primary_key = "nid"
+        primary_key = "id"
         if "id" in col_names:
             primary_key = "id"
         
@@ -461,7 +672,7 @@ class BQCore(BQGroundZero):
         all_queries = []
         for r in rows:
             for k, v in r.items():
-                if schema is not None and k not in schema:
+                if schema is not None and k not in [k.name for k in schema]:
                     all_queries.append(self.add_col_query(
                         col_name=k,
                         table=table,
@@ -544,7 +755,7 @@ class BQCore(BQGroundZero):
         existing_rows=[]
         new_rows=[]
         for row in rows:
-            if row["nid"] in all_ids:
+            if row["id"] in all_ids:
                 existing_rows.append(row)
             else:
                 new_rows.append(row)
@@ -774,7 +985,7 @@ class BigQueryGraphHandler(BQCore):
         """
         node_data = []
         for node, attrs in graph.nodes(data=True):
-            row = dict(nid=node, **attrs)
+            row = dict(id=node, **attrs)
             new_row = {}
             for k, v in row.items():
                 new_row[re.sub(r"\.", "_", k)] = v  # Normalize column names
@@ -1212,7 +1423,7 @@ if __name__ == '__main__':
             table_id='your_embeddings_table',
             custom=False,
             limit=5,
-            select=["nid"],
+            select=["id"],
             model_name='your_embedding_model' # Replace with your BQML model name/path
         )
         print("BQML Search Results:", results_bqml)

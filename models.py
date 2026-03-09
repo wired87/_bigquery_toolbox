@@ -19,7 +19,7 @@ class KnowledgeNode(BaseModel):
     tags: List[str] = Field(default_factory=list, description="List of specific tags")
     
     # Metadata
-    ingested_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    ingested_at: str = Field(default_factory=lambda: datetime.now())
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for BigQuery insertion"""
