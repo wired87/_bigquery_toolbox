@@ -137,3 +137,46 @@ class AuthManager:
         # Labels accept [a-z0-9_-]. Hex digest is safe.
         hash_object = hashlib.sha256(password.encode())
         return hash_object.hexdigest()[:63] # Limit length just in case
+
+    def get_metadata(self, dataset_id: str, key: str) -> Optional[str]:
+        """Get a value from the user's METADATA table by key."""
+        meta_ref = f"{self.project_id}.{dataset_id}.METADATA"
+        query = f"""
+            SELECT value FROM `{meta_ref}` WHERE key = @key LIMIT 1
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ScalarQueryParameter("key", "STRING", key)]
+        )
+        try:
+            job = self.bq_client.query(query, job_config=job_config)
+            rows = list(job.result())
+            return rows[0].value if rows else None
+        except Exception as e:
+            print(f"get_metadata error: {e}")
+            return None
+
+    def set_metadata(self, dataset_id: str, key: str, value: str) -> bool:
+        """Set a key-value in the user's METADATA table. Upserts if key exists."""
+        meta_ref = f"{self.project_id}.{dataset_id}.METADATA"
+        # Use MERGE to upsert
+        query = f"""
+            MERGE INTO `{meta_ref}` T
+            USING (
+                SELECT @key AS key, @value AS value, CURRENT_TIMESTAMP() AS updated_at
+            ) S
+            ON T.key = S.key
+            WHEN MATCHED THEN UPDATE SET T.value = S.value, T.updated_at = S.updated_at
+            WHEN NOT MATCHED THEN INSERT (key, value, updated_at) VALUES (S.key, S.value, S.updated_at)
+        """
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[
+                bigquery.ScalarQueryParameter("key", "STRING", key),
+                bigquery.ScalarQueryParameter("value", "STRING", value),
+            ]
+        )
+        try:
+            self.bq_client.query(query, job_config=job_config)
+            return True
+        except Exception as e:
+            print(f"set_metadata error: {e}")
+            return False

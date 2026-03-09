@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import uuid
 import pandas as pd
+import numpy as np
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -26,6 +27,8 @@ from pdfminer.high_level import extract_text_to_fp
 from pdfminer.layout import LAParams
 
 from client_package.processor.main import FileProcessorFacade
+# Import new pipeline for delegation if needed, or keeping this file as "Classic" for now
+from client_package.pipeline import ProductionPipeline as ModularPipeline
 from gutils import GUtils
 
 # Configure Logging
@@ -42,8 +45,8 @@ TABLE_ID = "nodes"
 MODEL_ID = "embedding_model"
 
 class PipelineConfig(BaseModel):
-    chunk_size: int = 200
-    chunk_overlap: int = 50
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
     use_docai: bool = True
     processor_id: Optional[str] = PROCESSOR_ID
     dataset_id: str
@@ -68,6 +71,7 @@ class KnowledgeRow(BaseModel):
     page_number: Optional[int] = None
     # New Field
     relative_parent_dir: Optional[str] = None
+    edge_ids: List[str] = Field(default_factory=list)
     
     # Table-specific fields
     is_table_row: Optional[bool] = None
@@ -122,71 +126,49 @@ class ProductionIngestionPipeline:
             content: bytes,
             status_callback=None,
             metadata: Optional[Dict[str, Any]] = None):
+        """
+        Facade method that now delegates to the new modular pipeline.
+        """
         self.start_time = datetime.now()
         
-        async def report(msg, step=None):
-             if status_callback: await status_callback(msg, step or "pipeline")
-
-        print(f"🚀 Processing file: {filename}")
+        # Configure and Instantiate the Modular Pipeline
+        pipeline_config = {
+            "dataset_id": self.config.dataset_id,
+            "table_id": self.config.table_id,
+            "table_ref": f"{PROJECT_ID}.{self.config.dataset_id}.{self.config.table_id}"
+        }
         
-        if not self.bq_client:
-            print("❌ BigQuery client not available. Aborting pipeline.")
-            return "Failed: Credentials missing on server."
-
+        pipeline = ModularPipeline(
+            config=pipeline_config,
+            bq_client=self.bq_client,
+            embedding_model=self.embedding_model
+        )
+        
+        print(f"🚀 Processing file: {filename} (via Modular Pipeline)")
+        
         try:
-            # 1. Extraction (In-Memory)
-            await report(f"📑 Extracting content from {filename}...")
-            
-            docs:list[Document] = self.file_handler.process_bytes(filename, content)
-            if not docs:
-                print(f"No content extracted from {filename}")
-                await report("⚠️ No content extracted.")
-                return "No content extracted."
-
-            # 2. Transformation
-            await report(f"🧩 Chunking {len(docs)} documents...")
-            rows = self.transform_to_rows(filename, docs, metadata)
-            
-            # 3. Schema Check
-            await report("🛠️ Verifying BigQuery resources...")
-            try:
-                await asyncio.to_thread(self.ensure_resources)
-            except Exception as e:
-                print(f"⚠️ Resource verification warning: {e}")
-                # Continue, as tables might already exist or simple schema update failed
-            
-            # 4. Generate Embeddings (Vertex AI)
-            if self.embedding_model:
-                await report(f"🧠 Generating embeddings for {len(rows)} chunks...")
-                
-                try:
-                    # No longer wrapping in to_thread here as the method itself is now async and handles internal blocking calls
-                    await self.generate_batch_embeddings(rows, status_callback=report)
-                except Exception as e:
-                     await report(f"⚠️ Embedding generation failed: {e}")
-                     print(f"Embedding error: {e}")
-            else:
-                await report("⚠️  Embedding model not available. Skipping embedding generation.")
-                
-            # 5. Upsert (Optimized)
-            await report(f"💾 Upserting {len(rows)} rows to BigQuery...")
-            upsert_start = datetime.now()
-            count = await asyncio.to_thread(self.upsert_rows, rows)
-            upsert_time = (datetime.now() - upsert_start).total_seconds()
-            
-            total_time = (datetime.now() - self.start_time).total_seconds()
-            print(f"⏱️ Total processing time: {total_time:.2f}s (Upsert: {upsert_time:.2f}s)")
-            
-            if total_time > 4: 
-                print(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
-                await report(f"⚠️ Processing time {total_time:.2f}s exceeded target.")
-
-            return f"Processed {filename}: Ingested {count} rows."
-            
+             # Ensure resources first (Legacy requirement logic, could be moved to Pipeline too)
+             if status_callback: await status_callback("🛠️ Verifying resources...", "init")
+             await self.ensure_resources_safe()
+             
+             # Run
+             result_msg = await pipeline.run_pipeline(filename, content, metadata=metadata, status_callback=status_callback)
+             
+             total_time = (datetime.now() - self.start_time).total_seconds()
+             print(f"⏱️ Total processing time: {total_time:.2f}s")
+             
+             return result_msg
+             
         except Exception as e:
             print(f"❌ Pipeline Critical Error: {e}")
-            await report(f"❌ Critical Pipeline Failure: {str(e)}")
+            if status_callback: await status_callback(f"❌ Critical Pipeline Failure: {str(e)}", "error")
             raise e
+
+    async def ensure_resources_safe(self):
+         try:
+             await asyncio.to_thread(self.ensure_resources)
+         except Exception as e:
+             print(f"Schema check warn: {e}")
 
 
 
@@ -241,6 +223,15 @@ class ProductionIngestionPipeline:
             gutils = GUtils(project_id=PROJECT_ID)
             docs = []
 
+            # Define block-level tags that typically define structure
+            BLOCK_TAGS = {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'blockquote', 'pre', 'table', 'div', 'section', 'article'}
+            
+            def has_block_children(element: Tag) -> bool:
+                for child in element.children:
+                    if isinstance(child, Tag) and child.name in BLOCK_TAGS:
+                        return True
+                return False
+
             def traverse(tag: Tag, parent_id: Optional[str] = None):
                 if not isinstance(tag, Tag): return
 
@@ -248,49 +239,54 @@ class ProductionIngestionPipeline:
                 if tag.name == 'table':
                     table_docs = self._process_table_element(tag, filename, parent_id)
                     docs.extend(table_docs)
-                    return  # Don't traverse children of table, already handled
+                    return  # Don't traverse children of table
 
-                # Get clean text content (no HTML/CSS)
-                text_content = tag.get_text(strip=True)
+                # Check if this tag is a "Leaf Block" (contains text but no further block structure)
+                # Or if it's a specific content tag like P or H* that we always want to treat as a unit
+                is_content_unit = (tag.name in {'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'}) or \
+                                  (tag.name in BLOCK_TAGS and not has_block_children(tag))
 
-                # Only process tags that have actual text content
-                if text_content:
-                    # Save just the clean content and the tag name
-                    # We avoid stringifying the whole tag (str(tag)) which contains attributes/styles
-                    node = gutils.create_node(
-                        tag_name=tag.name,
-                        content=text_content,
-                        parent_id=parent_id,
-                        metadata={
-                            "file_name": filename,
-                            "file_type": "pdf",
-                            "tag": tag.name,
-                            "page_number": 1
-                        },
-                        defer_embedding=True
-                    )
-
-                    # Also create Documents for the pipeline flow
-                    # If content is long, we split it here
-                    if len(text_content) > 200:
-                        splits = self.splitter.split_text(text_content)
-                    else:
-                        splits = [text_content]
-
-                    for i, split in enumerate(splits):
-                        docs.append(Document(
-                            page_content=split,
+                if is_content_unit:
+                    # Get clean text content
+                    text_content = tag.get_text(" ", strip=True)
+                    
+                    if text_content and len(text_content) > 5: # Filter very short noise
+                        # Save node
+                        node = gutils.create_node(
+                            tag_name=tag.name,
+                            content=text_content,
+                            parent_id=parent_id,
                             metadata={
-                                "id": f"{node.id}_{i}",
                                 "file_name": filename,
-                                "html_tag": tag.name,
-                                "parent_ref": parent_id
-                            }
-                        ))
+                                "file_type": "pdf",
+                                "tag": tag.name,
+                                "page_number": 1
+                            },
+                            defer_embedding=True
+                        )
 
-                    for child in tag.children:
-                        if isinstance(child, Tag):
-                            traverse(child, node.id)
+                        # Create Documents
+                        if len(text_content) > self.config.chunk_size:
+                             splits = self.splitter.split_text(text_content)
+                        else:
+                             splits = [text_content]
+
+                        for i, split in enumerate(splits):
+                            docs.append(Document(
+                                page_content=split,
+                                metadata={
+                                    "id": f"{node.id}_{i}",
+                                    "file_name": filename,
+                                    "html_tag": tag.name,
+                                    "parent_ref": parent_id
+                                }
+                            ))
+                    return # Stop recursion, we consumed this block
+
+                # Recurse for structural tags (body, div with children, etc.)
+                for child in tag.children:
+                    if isinstance(child, Tag):
+                        traverse(child, parent_id if parent_id else None)
 
             root = soup.body if soup.body else soup
             traverse(root)
@@ -450,6 +446,7 @@ class ProductionIngestionPipeline:
             bigquery.SchemaField("ingested_at", "STRING"),
             bigquery.SchemaField("row_type", "STRING"),
             bigquery.SchemaField("relative_parent_dir", "STRING"),
+            bigquery.SchemaField("edge_ids", "STRING", mode="REPEATED"),
             # Table-specific fields
             bigquery.SchemaField("is_table_row", "BOOL"),
             bigquery.SchemaField("table_id", "STRING"),
@@ -529,101 +526,192 @@ class ProductionIngestionPipeline:
                 print(f"⚠️ BQML Model optimization skipped: {e}")
                 print("ℹ️ Pipeline will continue using standard search.")
 
-    def upsert_rows(self, rows: List[KnowledgeRow]) -> int:
+    async def upsert_rows(self, rows: List[KnowledgeRow]) -> int:
         if not rows: return 0
         
         table_ref = f"{PROJECT_ID}.{self.config.dataset_id}.{self.config.table_id}"
         bq_rows = [r.to_bq_dict() for r in rows]
         
-        # Batching for Upsert (Limit 200 per user request)
-        BATCH_SIZE = 200
+        # Batching for Upsert
+        BATCH_SIZE = 500  # Increased batch size for efficiency
         total_batches = (len(bq_rows) + BATCH_SIZE - 1) // BATCH_SIZE
         
-        print(f"📦 Upserting {len(bq_rows)} rows in {total_batches} batches...")
+        print(f"📦 Upserting {len(bq_rows)} rows in {total_batches} batches (Parallel)...")
         
         inserted_count = 0
         
+        async def insert_batch(batch, batch_idx):
+            try:
+                # Run sync BQ call in thread
+                errors = await asyncio.to_thread(
+                    self.bq_client.insert_rows_json, 
+                    table_ref, 
+                    batch
+                )
+                if errors:
+                    print(f"BQ Insert Errors (Batch {batch_idx}): {errors}")
+                    return 0
+                return len(batch)
+            except Exception as e:
+                print(f"Insert failed (Batch {batch_idx}): {e}")
+                return 0
+
+        # Run inserts in parallel
+        tasks = []
         for i in range(0, len(bq_rows), BATCH_SIZE):
             batch = bq_rows[i : i + BATCH_SIZE]
+            tasks.append(insert_batch(batch, i//BATCH_SIZE + 1))
             
-            # DEBUG PRINTS visible in CLI
-            print(f"   Batch {i//BATCH_SIZE + 1}/{total_batches}: {len(batch)} rows")
-            
-            try:
-                errors = self.bq_client.insert_rows_json(table_ref, batch)
-                if errors:
-                    print(f"BQ Insert Errors (Batch {i}): {errors}")
-                else:
-                    inserted_count += len(batch)
-            except Exception as e:
-                print(f"Insert failed (Batch {i}): {e}")
+        results = await asyncio.gather(*tasks)
+        inserted_count = sum(results)
             
         print(f"✅ Upsert complete. {inserted_count}/{len(bq_rows)} rows inserted.")
         return inserted_count
 
     async def generate_batch_embeddings(self, rows: List[KnowledgeRow], status_callback=None):
         """
-        Generates embeddings for a list of rows using Vertex AI in batches.
+        Generates embeddings for a list of rows using Vertex AI with optimizations:
+        1. Parallel requests (asyncio.gather)
+        2. Semaphore for rate limiting
+        3. Recursive splitting for token limits
         """
         if not self.embedding_model:
             return
 
         texts = [row.content for row in rows]
-        # Vertex AI limit for text-embedding-004 is 250 instances per request
-        # HOWEVER, there is also a token limit of 20,000 tokens per request.
-        # Reducing batch size to 50 to be safe.
-        BATCH_SIZE = 50
-        all_embeddings = []
-        total_batches = (len(texts) + BATCH_SIZE - 1) // BATCH_SIZE
-
-        print(f"🧠 Generating embeddings for {len(texts)} rows in batches of {BATCH_SIZE}...")
+        # Maximize batch size within limits (250 is limit, 20k tokens)
+        # 20 is safe
+        BATCH_SIZE = 20 
+        all_embeddings = [None] * len(texts) # Pre-allocate
         
-        for i in range(0, len(texts), BATCH_SIZE):
-            batch_num = i // BATCH_SIZE + 1
-            batch_texts = texts[i : i + BATCH_SIZE]
-            
-            # Report progress
-            if status_callback:
-                await status_callback(f"🧠 Generating embeddings: Batch {batch_num}/{total_batches}...", "embedding")
+        # Semester to limit concurrency (Vertex AI Quota)
+        # Assuming 600 QPM -> ~10 concurrent requests safe to burst
+        sem = asyncio.Semaphore(15) 
 
-            try:
-                # Local Embedding Call - needs to be awaited if blocking, but Vertex SDK is sync by default
-                embeddings = await self.safe_get_embeddings(batch_texts)
-                all_embeddings.extend([e.values for e in embeddings])
-                print(f"   Processed batch {batch_num}...")
-            except Exception as e:
-                print(f"❌ Failed to generate embeddings for batch {i}: {e}")
-                if status_callback:
-                    await status_callback(f"❌ Embedding Error (Batch {batch_num}): {str(e)[:100]}...", "error")
-                # Pad with empty lists if error
-                all_embeddings.extend([[] for _ in range(len(batch_texts))])
+        async def process_batch(start_idx, batch_texts):
+             async with sem:
+                try:
+                    embeddings = await self.safe_get_embeddings(batch_texts)
+                    return start_idx, [e.values for e in embeddings]
+                except Exception as e:
+                    print(f"❌ Batch {start_idx} failed: {e}")
+                    return start_idx, [[] for _ in range(len(batch_texts))]
+
+        tasks = []
+        total_batches = (len(texts) + BATCH_SIZE - 1) // BATCH_SIZE
+        print(f"🧠 Generating embeddings for {len(texts)} rows (Parallel, {total_batches} batches)...")
+
+        for i in range(0, len(texts), BATCH_SIZE):
+            batch_texts = texts[i : i + BATCH_SIZE]
+            tasks.append(process_batch(i, batch_texts))
+        
+        # Report start
+        if status_callback: await status_callback(f"🧠 Generating embeddings in parallel...", "embedding")
+
+        # Gather results
+        results = await asyncio.gather(*tasks)
+        
+        # Reassemble
+        for start_idx, embs in results:
+            for i, emb in enumerate(embs):
+                if start_idx + i < len(all_embeddings):
+                    all_embeddings[start_idx + i] = emb
 
         # Map back to rows
+        count = 0
         for row, emb in zip(rows, all_embeddings):
-            row.embedding = emb
+            if emb:
+                row.embedding = emb
+                count += 1
+        
+        print(f"✅ Generated {count} embeddings.")
 
     async def safe_get_embeddings(self, texts: List[str]):
         """
         Wrapper to handle token limit errors by splitting batches recursively.
         """
+        if not texts: return []
         try:
+             # Run in thread? No, Vertex SDK is sync but let's wrap it.
+             # Ideally use async client but standard is sync.
              return await asyncio.to_thread(self.embedding_model.get_embeddings, texts)
         except Exception as e:
              err_str = str(e).lower()
-             if "token count" in err_str and len(texts) > 1:
+             if ("token count" in err_str or "429" in err_str or "quota" in err_str) and len(texts) > 1:
                  # Recursive split
                  mid = len(texts) // 2
-                 print(f"⚠️ Token limit hit. Splitting batch of {len(texts)} into {mid} and {len(texts)-mid}...")
-                 left = await self.safe_get_embeddings(texts[:mid])
-                 right = await self.safe_get_embeddings(texts[mid:])
-                 return left + right
+                 # print(f"⚠️ Limit hit. Splitting {len(texts)} -> {mid}, {len(texts)-mid}")
+                 left_task = self.safe_get_embeddings(texts[:mid])
+                 right_task = self.safe_get_embeddings(texts[mid:])
+                 l, r = await asyncio.gather(left_task, right_task)
+                 return l + r
              else:
+                 # If single item fails or unknown error, raise
+                 # Maybe retry logic here?
                  raise e
 
 
 
     def generate_missing_embeddings(self):
          pass # Handled in batch
+
+    def _calculate_semantic_edges(self, rows: List[KnowledgeRow], threshold: float = 0.9):
+        """
+        Calculates semantic edges between rows based on cosine similarity of embeddings.
+        Also adds hierarchical edges (parent_file_id).
+        Updates 'edge_ids' in place.
+        """
+        if not rows: return
+        
+        # 1. Hierarchical Links
+        # Create a lookup for quick parent checking if needed, but here we just point to parent ID
+        # The parent logic might need to ensure the parent actually exists, but assuming parent_file_id IS a valid ID
+        
+        # 2. Semantic Links
+        # Filter rows that have embeddings
+        valid_rows = [r for r in rows if r.embedding]
+        if len(valid_rows) < 2:
+            return
+
+        try:
+            # Stack embeddings: N x D
+            matrix = np.array([r.embedding for r in valid_rows])
+            
+            # Normalize (Cosine Similarity = dot product of normalized vectors)
+            norm = np.linalg.norm(matrix, axis=1, keepdims=True)
+            # Avoid divide by zero
+            norm[norm == 0] = 1e-10
+            normalized_matrix = matrix / norm
+            
+            # Compute similarity: (N x D) @ (D x N) -> N x N
+            similarity = np.dot(normalized_matrix, normalized_matrix.T)
+            
+            # Iterate and link
+            count_links = 0
+            for i in range(len(valid_rows)):
+                # Get indices where sim > threshold
+                # Exclude self (i)
+                matches = np.where(similarity[i] > threshold)[0]
+                
+                linked_ids = []
+                for idx in matches:
+                    if idx != i:
+                        linked_ids.append(valid_rows[idx].id)
+                
+                # Update the row
+                if linked_ids:
+                    # Initialize if None (though default is list)
+                    if valid_rows[i].edge_ids is None:
+                        valid_rows[i].edge_ids = []
+                    
+                    valid_rows[i].edge_ids.extend(linked_ids)
+                    count_links += len(linked_ids)
+            
+            print(f"🕸️  Created {count_links} semantic edges (threshold > {threshold})")
+
+        except Exception as e:
+            print(f"⚠️  Error calculating semantic edges: {e}")
+
 
 if __name__ == "__main__":
     # Test Run

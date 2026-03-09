@@ -4,7 +4,13 @@ A powerful Python-based toolbox for intelligent BigQuery data management with AI
 
 ## DEMO 
 ### **(do not use in prod)**
-https://bigquerytoolbox.streamlit.app/
+https://bigquerytoolbox-enzybofsxdgofqtmqmxzgy.streamlit.app/
+
+## todo dev:
+Get GCP creds.json file for Service Account(SA) granting roles BigQuery Admin, Vertex Ai Admin (enable API) -> Convert to .toml (with Gem) -> paste in streamlit Advanced Settings (at App deployment)
+
+## Any issue? 
+Create @ /issues
 
 Now featuring **Local Core** mode with direct Streamlit-to-Engine integration, eliminating the need for a separate WebSocket server.
 
@@ -70,6 +76,10 @@ Now featuring **Local Core** mode with direct Streamlit-to-Engine integration, e
    # Run the Streamlit client (Local Core Mode)
    python -m streamlit run client_package/app.py
    ```
+
+4. **Vertex RAG Engine (Optional)**
+   - RAG Engine uses `europe-west4` by default (us-central1/us-east1/us-east4 are allowlisted).
+   - Override: `VRAG_LOCATION=europe-west4` or `VRAG_LOCATION=us-west1` in `.env`.
 
 ## 📚 Documentation
 

@@ -159,27 +159,53 @@ class IngestHandler:
             with open(temp_file_path, "wb") as f:
                 f.write(content)
             
-            from ingestion_pipeline import ProductionIngestionPipeline, PipelineConfig
+            # from ingestion_pipeline import ProductionIngestionPipeline, PipelineConfig
+            from client_package.pipeline.production_pipeline import ProductionPipeline
             
             defaults = {"chunk_size": 200, "chunk_overlap": 50, "use_docai": True}
             if ingestion_config: defaults.update(ingestion_config)
             
-            config = PipelineConfig(
-                chunk_size=defaults["chunk_size"],
-                chunk_overlap=defaults["chunk_overlap"],
-                use_docai=defaults["use_docai"],
-                dataset_id=self.engine.current_dataset_id,
-                table_id=getattr(self.engine, 'current_table_id', 'KB')
+            config = {
+                "chunk_size": defaults["chunk_size"],
+                "chunk_overlap": defaults["chunk_overlap"],
+                "use_docai": defaults["use_docai"],
+                "dataset_id": self.engine.current_dataset_id,
+                "table_id": getattr(self.engine, 'current_table_id', 'KB'),
+                # Add table_ref for convenience in the pipeline
+                "table_ref": f"{self.engine.bqclient.project}.{self.engine.current_dataset_id}.{getattr(self.engine, 'current_table_id', 'KB')}"
+            }
+            
+            # Inject clients from Engine
+            pipeline = ProductionPipeline(
+                config=config,
+                bq_client=self.engine.bqclient,
+                embedding_model=self.engine.embedding_model
             )
-            pipeline = ProductionIngestionPipeline(config)
             
             await update_status(f"🚀 Initializing extraction for {filename}...", "extract")
-            result_message = await pipeline.run_pipeline_for_bytes(
+            vrag_ok = False
+            result_message = await pipeline.run_pipeline(
                 filename,
                 content,
                 status_callback=update_status,
                 metadata=metadata
             )
+
+            # Upsert to Vertex AI RAG corpus (user-specific). Local BQ KB is primary; Vertex RAG is additive.
+            # Failures are logged but do not block the upload.
+            try:
+                from vrag.user_corpus import upsert_file_to_user_corpus
+                vrag_ok = await asyncio.to_thread(
+                    upsert_file_to_user_corpus,
+                    self.engine,
+                    temp_file_path,
+                    display_name=filename,
+                )
+            except ImportError:
+                pass
+            except Exception as e:
+                log_exception(e, "Vertex RAG upsert")
+                print(f"⚠️ Vertex RAG upsert skipped: {e}")
 
             # Post-ingestion verification
             try:
@@ -192,6 +218,8 @@ class IngestHandler:
                 print("Err", e)
             
             msg = f"✅ {result_message}"
+            if vrag_ok:
+                msg += " (Vertex RAG indexed)"
             if filename.lower().endswith(".pdf"):
                 msg += f"\n\n🔗 [View Knowledge Graph](/graphs/{filename}_graph.html)"
             return msg

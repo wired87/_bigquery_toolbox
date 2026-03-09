@@ -7,8 +7,6 @@ annotated-types
 anyio
 asgiref
 asttokens
-attrs
-audioop-lts
 autobahn
 Automat
 beautifulsoup4
@@ -53,7 +51,6 @@ google-genai
 google-resumable-media
 googleapis-common-protos
 greenlet
-grpc-google-iam-v1
 grpcio
 grpcio-status
 h11
@@ -110,7 +107,7 @@ plotly
 prompt_toolkit
 propcache
 proto-plus
-protobuf
+protobuf==3.20.3
 pure_eval
 py-ubjson
 pyarrow
@@ -150,7 +147,7 @@ stack-data
 standard-aifc
 standard-chunk
 starlette
-streamlit
+streamlit==1.54.0
 sympy
 tabulate
 tenacity
@@ -170,13 +167,8 @@ ujson
 uritemplate
 urllib3
 uuid_utils
-uvicorn
 validators
-vanna
 watchdog
-wcwidth
 websockets
 xxhash
 yarl
-zope.interface
-zstandard

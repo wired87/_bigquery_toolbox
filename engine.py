@@ -122,7 +122,19 @@ class CoreEngine(BQCore):
         self.sql_handler = SQLHandler(self)
         self.ingest_handler = IngestHandler(self)
         self.general_handler = GeneralHandler(self)
-    
+
+        # Vertex AI RAG Engine (production-ready; local KB is fallback)
+        try:
+            from vrag.engine import VertexRAGEngine
+            from vrag.config import VRAGConfig
+            vrag_cfg = VRAGConfig()
+            vrag_cfg.project_id = vrag_cfg.project_id or self.pid
+            self.vrag_engine = VertexRAGEngine(config=vrag_cfg, project_id=self.pid)
+            print("✅ Vertex RAG Engine initialized (local KB fallback enabled)")
+        except ImportError as e:
+            self.vrag_engine = None
+            print(f"⚠️ Vertex RAG Engine unavailable: {e}")
+
     def clear_history(self):
         """
         Clear the chat history for the current session.
@@ -155,7 +167,18 @@ class CoreEngine(BQCore):
             # Initialize/reinitialize engine with user's dataset
             await asyncio.to_thread(self._initialize_engine, self.current_dataset_id)
             print(f"✅ Authenticated {email}. Using Dataset: {self.current_dataset_id} | Table: {self.current_table_id}")
-            
+
+            # Ensure user has Vertex AI RAG corpus (create if missing, save to METADATA)
+            try:
+                from vrag.user_corpus import ensure_user_vertex_rag_corpus
+                corpus_id = await asyncio.to_thread(ensure_user_vertex_rag_corpus, self)
+                if corpus_id:
+                    print(f"📚 Vertex RAG corpus ready for {email}")
+            except ImportError:
+                pass
+            except Exception as e:
+                print(f"⚠️ Vertex RAG corpus setup skipped: {e}")
+
         return result
 
     async def get_existing_filenames(self) -> Set[str]:
@@ -254,9 +277,44 @@ class CoreEngine(BQCore):
                 custom=True, # We pass the vector
                 limit=limit,
                 model_name=None, # Not needed for custom=True
-                select=["id", "content", "file_id", "file_type", "page_number", "html_tag", "metadata"],
-                embed_column="embedding" # FIXED: Always use the content embedding column
+                select=["id", "content", "file_id", "file_type", "page_number", "html_tag", "metadata", "edge_ids"],
+                embed_column="embedding"
             )
+            
+            # --- Result Expansion (Semantic Linking) ---
+            # 1. Collect all edge IDs
+            edge_ids = set()
+            for row in results:
+                if "edge_ids" in row and row["edge_ids"]:
+                    # edge_ids is a list
+                    edge_ids.update(row["edge_ids"])
+            
+            # Remove IDs we already have in the main results
+            existing_ids = {r["id"] for r in results}
+            new_ids = edge_ids - existing_ids
+            
+            if new_ids:
+                print(f"🕸️ Expanding search with {len(new_ids)} linked items...")
+                # 2. Fetch linked rows
+                # Sanitize IDs for SQL
+                formatted_ids = ", ".join([f"'{eid}'" for eid in new_ids])
+                
+                expand_query = f"""
+                    SELECT id, content, file_id, file_type, page_number, html_tag, metadata
+                    FROM `{self.pid}.{self.current_dataset_id}.{target_table}`
+                    WHERE id IN ({formatted_ids})
+                """
+                
+                try:
+                    linked_rows = self.bq_core.run_query(expand_query, conv_to_dict=True)
+                    # Mark them as linked context
+                    for lr in linked_rows:
+                        lr["content"] = f"[Linked Context] {lr.get('content', '')}"
+                        results.append(lr)
+                except Exception as ex:
+                    print(f"⚠️ Failed to fetch linked rows: {ex}")
+            
+            return results
         except Exception as e:
              print(f"Vector search failed: {e}")
              return [{"error": str(e), "content": "Unable to search KB."}]

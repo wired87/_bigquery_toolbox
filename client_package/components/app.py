@@ -27,13 +27,13 @@ except ImportError as e:
 
 # --- Configuration ---
 st.set_page_config(
-    page_title="BigQuery AI Toolbox",
+    page_title="BigQuery AI Toolbox (Local Core)",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
     menu_items={
         'Get Help': 'mailto:support@example.com',
-        'About': "# BigQuery AI Toolbox"
+        'About': "# BigQuery AI Toolbox\nRunning in **Local Core** mode (No Websockets)"
     }
 )
 
@@ -103,7 +103,6 @@ st.markdown("""
         font-weight: 500;
     }
     
-    
     .user-message * {
         color: #000000 !important;
     }
@@ -151,7 +150,6 @@ def get_core_system():
         with st.spinner("Initializing AI Core Engine..."):
             with open(os.path.abspath("credentials.toml"), "w") as f:
                 json.dump(dict(st.secrets["gcp_service_account"]), f)
-
 
             engine = CoreEngine(
                 require_auth=True,

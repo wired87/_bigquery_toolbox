@@ -8,7 +8,6 @@ anyio
 asgiref
 asttokens
 attrs
-audioop-lts
 autobahn
 Automat
 beautifulsoup4
@@ -22,7 +21,6 @@ channels
 charset-normalizer
 click
 colorama
-comtypes
 constantly
 cryptography
 daphne
@@ -111,13 +109,12 @@ plotly
 prompt_toolkit
 propcache
 proto-plus
-protobuf
+protobuf==3.20.3
 pure_eval
 py-ubjson
 pyarrow
 pyasn1
 pyasn1_modules
-PyAudio
 pycparser
 pydantic
 pydantic-settings
@@ -127,13 +124,10 @@ Pygments
 pyOpenSSL
 pyparsing
 pypdf
-pypiwin32
 python-dateutil
 python-dotenv
-pyttsx3
 pytz
 pyvis
-pywin32
 PyYAML
 referencing
 reportlab
@@ -155,7 +149,7 @@ stack-data
 standard-aifc
 standard-chunk
 starlette
-streamlit
+streamlit==1.54.0
 sympy
 tabulate
 tenacity
